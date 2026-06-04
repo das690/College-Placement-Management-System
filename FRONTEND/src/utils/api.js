@@ -1,14 +1,14 @@
 import axios from 'axios';
 
+// This tells React: "If we are live, use Render. If we are testing locally, use localhost."
 const API = axios.create({
-  baseURL: 'http://localhost:5000/api', // Points to your backend server
+  baseURL: import.meta.env.VITE_API_URL || 'https://college-placement-management-system-30p4.onrender.com/api',
 });
 
-// This automatically attaches the token to every request if the user is logged in
+// Attach token to requests
 API.interceptors.request.use((req) => {
-  const token = localStorage.getItem('token');
-  if (token) {
-    req.headers.Authorization = `Bearer ${token}`;
+  if (localStorage.getItem('token')) {
+    req.headers.Authorization = `Bearer ${localStorage.getItem('token')}`;
   }
   return req;
 });
