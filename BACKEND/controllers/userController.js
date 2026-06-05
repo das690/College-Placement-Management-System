@@ -117,8 +117,10 @@ const forgotPassword = async (req, res) => {
     user.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
     await user.save();
 
-    // 3. Create the reset URL (points to your React frontend)
-    const resetUrl = `http://localhost:5173/reset-password/${resetToken}`;
+    // 3. Create the reset URL dynamically using the environment variable
+    // This allows it to work on both local testing and production deployment!
+    const frontendURL = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const resetUrl = `${frontendURL}/reset-password/${resetToken}`;
     
     // 4. Send the Email
     const message = `You are receiving this email because you (or someone else) requested a password reset. \n\nPlease click on the following link, or paste it into your browser to complete the process: \n\n${resetUrl}\n\nIf you did not request this, please ignore this email and your password will remain unchanged.`;
