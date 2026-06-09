@@ -130,14 +130,18 @@ Backend: [https://college-placement-management-system-30p4.onrender.com] (Note: 
 
 Admin Secret Passcode : GUVI-ADMIN (For registering as admin only)
 
-Admin Credentials
-Email : admin@demo.com
-Password : admin123
+## 🔑 Demo Credentials
 
-Company Credentials
-Email : company@demo.com
-Password : company123
+To instantly test the different role-based dashboards without registering, please use the following demo accounts:
 
-Student Credentials
-Email : student@demo.com
-Password : student123
+**🛡️ Admin Role (Full Access & Analytics)**
+* **Email:** admin@demo.com
+* **Password:** admin123
+
+**🏢 Company Role (Post Jobs & Schedule Interviews)**
+* **Email:** company@demo.com
+* **Password:** company123
+
+**👨‍🎓 Student Role (Apply & Track Status)**
+* **Email:** student@demo.com
+* **Password:** student123
