@@ -129,3 +129,15 @@ Frontend: [placementportalmanagesys.netlify.app]
 Backend: [https://college-placement-management-system-30p4.onrender.com] (Note: Free tier Render instances spin down after inactivity, so the first API request may take up to 50 seconds to wake the server).
 
 Admin Secret Passcode : GUVI-ADMIN (For registering as admin only)
+
+Admin Credentials
+Email : admin@demo.com
+Password : admin123
+
+Company Credentials
+Email : company@demo.com
+Password : company123
+
+Student Credentials
+Email : student@demo.com
+Password : student123
