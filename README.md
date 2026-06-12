@@ -66,13 +66,16 @@ Want to run this project locally? Follow these steps:
 ### 1. Clone the repository
 ```bash
 git clone [https://github.com/das690/College-Placement-Management-System.git]
+```
 
 2. Backend Setup
 ```bash
 cd backend
 npm install
+```
 
 Create a .env file in the backend folder and add the following variables:
+```
 
 Code snippet
 PORT=5000
@@ -91,18 +94,19 @@ BREVO_API_KEY=your_brevo_api_key
 
 # Security
 ADMIN_SECRET=your_custom_admin_passcode
+```
 
-npm run dev
-
-. Frontend Setup
+1. Frontend Setup
 Open a new terminal window:
 
-Bash
+```Bash
 cd frontend
 npm install
-
+```
 Start the Vite development server:
+```bash
 npm run dev
+```
 
 💡 How to Use
 Creating an Admin Account
