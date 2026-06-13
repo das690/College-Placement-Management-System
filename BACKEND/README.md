@@ -39,6 +39,23 @@ This application features dynamic role-based access control. The UI and availabl
 
 ---
 
+## 🔑 Demo Credentials
+
+To instantly test the different role-based dashboards without registering, please use the following demo accounts:
+
+**🛡️ Admin Role (Full Access & Analytics)**
+* **Email:** admin@demo.com
+* **Password:** admin123
+
+**🏢 Company Role (Post Jobs & Schedule Interviews)**
+* **Email:** company@demo.com
+* **Password:** company123
+
+**👨‍🎓 Student Role (Apply & Track Status)**
+* **Email:** student@demo.com
+* **Password:** student123
+---
+
 ## 🛠️ Tech Stack
 
 **Frontend:**
@@ -66,13 +83,16 @@ Want to run this project locally? Follow these steps:
 ### 1. Clone the repository
 ```bash
 git clone [https://github.com/das690/College-Placement-Management-System.git]
+```
 
 2. Backend Setup
 ```bash
 cd backend
 npm install
+```
 
 Create a .env file in the backend folder and add the following variables:
+```
 
 Code snippet
 PORT=5000
@@ -91,18 +111,19 @@ BREVO_API_KEY=your_brevo_api_key
 
 # Security
 ADMIN_SECRET=your_custom_admin_passcode
+```
 
-npm run dev
-
-. Frontend Setup
+1. Frontend Setup
 Open a new terminal window:
 
-Bash
+```Bash
 cd frontend
 npm install
-
+```
 Start the Vite development server:
+```bash
 npm run dev
+```
 
 💡 How to Use
 Creating an Admin Account
@@ -129,19 +150,3 @@ Frontend: [placementportalmanagesys.netlify.app]
 Backend: [https://college-placement-management-system-30p4.onrender.com] (Note: Free tier Render instances spin down after inactivity, so the first API request may take up to 50 seconds to wake the server).
 
 Admin Secret Passcode : GUVI-ADMIN (For registering as admin only)
-
-## 🔑 Demo Credentials
-
-To instantly test the different role-based dashboards without registering, please use the following demo accounts:
-
-**🛡️ Admin Role (Full Access & Analytics)**
-* **Email:** admin@demo.com
-* **Password:** admin123
-
-**🏢 Company Role (Post Jobs & Schedule Interviews)**
-* **Email:** company@demo.com
-* **Password:** company123
-
-**👨‍🎓 Student Role (Apply & Track Status)**
-* **Email:** student@demo.com
-* **Password:** student123
