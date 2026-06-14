@@ -38,6 +38,7 @@ This application features dynamic role-based access control. The UI and availabl
 * **Beautiful UI/UX:** Dark-mode glassmorphism design, conditional rendering, and animated toast notifications using **React-Hot-Toast**.
 
 ---
+```bash
 
 ## 🔑 Demo Credentials
 
@@ -55,6 +56,7 @@ To instantly test the different role-based dashboards without registering, pleas
 * **Email:** student@demo.com
 * **Password:** student123
 ---
+```bash
 
 ## 🛠️ Tech Stack
 
