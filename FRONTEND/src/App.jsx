@@ -50,10 +50,22 @@ function App() {
           <Route path="/reset-password" element={<ForgotPassword />} />
           <Route path="/reset-password/:token" element={<ResetPassword />} />
 
+          {/* ========================================= */}
+          {/*          MULTI-PAGE DASHBOARD ROUTES      */}
+          {/* ========================================= */}
+          
+          {/* 1. Base Dashboard Route (Overview Analytics) */}
           <Route 
             path="/dashboard" 
             element={user ? <Dashboard /> : <Navigate to="/login" />} 
           />
+
+          {/* 2. Dynamic Sub-Page Route (Catches /dashboard/jobs, etc.) */}
+          <Route 
+            path="/dashboard/:view" 
+            element={user ? <Dashboard /> : <Navigate to="/login" />} 
+          />
+
         </Routes>
       </main>
     </div>

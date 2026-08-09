@@ -1,86 +1,128 @@
 const express = require('express');
 const router = express.Router();
-const Application = require('../models/Application'); // Adjust path if your models folder is named differently
-const { protect } = require('../middleware/authMiddleware'); // Adjust path to your auth middleware
+const Application = require('../models/Application');
+const Job = require('../models/Job');
+const User = require('../models/User');
+const { protect } = require('../middleware/authMiddleware'); 
 
-// @desc    Get all applications
+// @desc    Get applications (Role-based filtering)
 // @route   GET /api/applications
-// @access  Private (All roles can fetch, frontend handles filtering based on role)
+// @access  Private
 router.get('/', protect, async (req, res) => {
   try {
-    // Populate the student and job details (including nested company details) 
-    // so the frontend tables can display names instead of raw IDs
-    const applications = await Application.find()
-      .populate('student', 'name email')
-      .populate({
-        path: 'job',
-        populate: {
-          path: 'company',
-          select: 'name email'
-        }
-      });
-      
+    let applications;
+    
+    if (req.user.role === 'admin') {
+      // Admins see everything, populated with job, drive and student details
+      applications = await Application.find()
+        .populate('drive', 'name status academicYear')
+        .populate({ path: 'job', populate: { path: 'company', select: 'name' }})
+        .populate('student', 'name email academicDetails');
+    } else if (req.user.role === 'student') {
+      // Students only see their own applications
+      applications = await Application.find({ student: req.user.id })
+        .populate('drive', 'name status academicYear')
+        .populate({ path: 'job', populate: { path: 'company', select: 'name' }});
+    } else if (req.user.role === 'company') {
+      // Companies only see applications targeting their specific jobs
+      const jobs = await Job.find({ company: req.user.id }).select('_id');
+      const jobIds = jobs.map(job => job._id);
+      applications = await Application.find({ job: { $in: jobIds } })
+        .populate('drive', 'name status academicYear')
+        .populate('job')
+        .populate('student', 'name email academicDetails');
+    }
+
     res.status(200).json(applications);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
 
-// @desc    Submit a new application
+// @desc    Submit a new application (ELIGIBILITY ENGINE)
 // @route   POST /api/applications
-// @access  Private (Only Students)
+// @access  Private (Students only)
 router.post('/', protect, async (req, res) => {
   try {
-    // Security check: Only students can apply for jobs
-    if (req.user.role !== 'student') {
-      return res.status(403).json({ message: 'Only students can apply for jobs' });
-    }
-
     const { jobId, resumeUrl } = req.body;
+    
+    // 1. Fetch the Job and the Student
+    const job = await Job.findById(jobId);
+    if (!job) return res.status(404).json({ message: 'Job position not found' });
 
-    // Check if the student has already applied to this specific job
-    const existingApplication = await Application.findOne({ job: jobId, student: req.user._id });
-    if (existingApplication) {
-      return res.status(400).json({ message: 'You have already applied to this job' });
+    const student = await User.findById(req.user.id);
+    const { academicDetails } = student;
+
+    // 2. Profile Completion Check
+    if (!academicDetails || !academicDetails.department || !academicDetails.cgpa || !academicDetails.graduationYear) {
+       return res.status(400).json({ message: 'You must complete your academic profile (CGPA, Department, Graduation Year) before applying.' });
     }
 
+    // 3. ELIGIBILITY ENGINE CHECKS
+    const { minCgpa, maxBacklogs, allowedDepartments, targetGraduationYear } = job.eligibility || {};
+
+    // Check CGPA
+    if (minCgpa !== undefined && academicDetails.cgpa < minCgpa) {
+       return res.status(403).json({ message: `Not eligible: Minimum CGPA required is ${minCgpa}. Yours is ${academicDetails.cgpa}.` });
+    }
+
+    // Check Backlogs
+    if (maxBacklogs !== undefined && academicDetails.activeBacklogs > maxBacklogs) {
+       return res.status(403).json({ message: `Not eligible: Maximum allowed backlogs is ${maxBacklogs}. You have ${academicDetails.activeBacklogs}.` });
+    }
+
+    // Check Department (if restricted)
+    if (allowedDepartments && allowedDepartments.length > 0) {
+       if (!allowedDepartments.includes(academicDetails.department)) {
+         return res.status(403).json({ message: `Not eligible: This role is restricted to specific departments: ${allowedDepartments.join(', ')}.` });
+       }
+    }
+
+    // Check Target Graduation Year (if specified)
+    if (targetGraduationYear && Number(academicDetails.graduationYear) !== Number(targetGraduationYear)) {
+       return res.status(403).json({ message: `Not eligible: Target graduation year for this role is ${targetGraduationYear}. Your graduation year is ${academicDetails.graduationYear}.` });
+    }
+
+    // 4. Check for duplicate application
+    const existingApplication = await Application.findOne({ job: jobId, student: req.user.id });
+    if (existingApplication) {
+      return res.status(400).json({ message: 'You have already applied for this position.' });
+    }
+
+    // 5. Success! Create the application linked to the Placement Drive
     const application = await Application.create({
+      drive: job.drive, 
       job: jobId,
-      student: req.user._id,
-      resumeUrl,
-      status: 'Applied'
+      student: req.user.id,
+      resumeUrl: resumeUrl || academicDetails.resumeUrl || 'Not provided'
     });
 
-    res.status(201).json(application);
+    const populatedApp = await Application.findById(application._id)
+      .populate('drive', 'name status academicYear')
+      .populate({ path: 'job', populate: { path: 'company', select: 'name' }})
+      .populate('student', 'name email academicDetails');
+
+    res.status(201).json(populatedApp);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
 
-// @desc    Update application status (and add interview details)
+// @desc    Update application status (HR/Admin)
 // @route   PUT /api/applications/:id/status
-// @access  Private (Companies and Admins)
+// @access  Private
 router.put('/:id/status', protect, async (req, res) => {
   try {
-    // Security check: Only companies and admins can change applicant statuses
-    if (req.user.role !== 'company' && req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Not authorized to update application status' });
-    }
-
-    const { status, interviewDate, interviewTime, interviewLink } = req.body;
     const application = await Application.findById(req.params.id);
-
-    if (!application) {
-      return res.status(404).json({ message: 'Application not found' });
-    }
-
-    // Update the status
-    application.status = status;
+    if (!application) return res.status(404).json({ message: 'Application not found' });
     
-    // If scheduling an interview, attach those details
-    if (interviewDate) application.interviewDate = interviewDate;
-    if (interviewTime) application.interviewTime = interviewTime;
-    if (interviewLink) application.interviewLink = interviewLink;
+    // Update core status
+    application.status = req.body.status;
+    
+    // Update interview details if provided
+    if (req.body.interviewDate) application.interviewDate = req.body.interviewDate;
+    if (req.body.interviewTime) application.interviewTime = req.body.interviewTime;
+    if (req.body.interviewLink) application.interviewLink = req.body.interviewLink;
 
     await application.save();
     res.status(200).json(application);
