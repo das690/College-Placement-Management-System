@@ -572,6 +572,41 @@ const Dashboard = () => {
     return Object.values(deptMap);
   }, [filteredAppsByDrive]);
 
+  // Organization-wise Hiring Stats
+  const orgStats = useMemo(() => {
+    const orgMap = {};
+
+    filteredJobsByDrive.forEach(job => {
+      const compName = job.company?.name || 'Organization';
+      const compId = job.company?._id || compName;
+      if (!orgMap[compId]) {
+        orgMap[compId] = { name: compName, positions: 0, applications: 0, selected: 0 };
+      }
+      orgMap[compId].positions += 1;
+    });
+
+    filteredAppsByDrive.forEach(app => {
+      const compName = app.job?.company?.name || 'Organization';
+      const compId = app.job?.company?._id || compName;
+      if (!orgMap[compId]) {
+        orgMap[compId] = { name: compName, positions: 0, applications: 0, selected: 0 };
+      }
+      orgMap[compId].applications += 1;
+      if (app.status === 'Selected' || app.status === 'Hired') {
+        orgMap[compId].selected += 1;
+      }
+    });
+
+    return Object.values(orgMap);
+  }, [filteredJobsByDrive, filteredAppsByDrive]);
+
+  // Helper to get participating organizations for a drive
+  const getParticipatingCompaniesForDrive = (driveId) => {
+    const driveJobs = jobs.filter(j => (typeof j.drive === 'object' ? j.drive?._id : j.drive) === driveId);
+    const companyNames = [...new Set(driveJobs.map(j => j.company?.name).filter(Boolean))];
+    return companyNames;
+  };
+
   // Stage Breakdown Stats
   const stageStats = useMemo(() => {
     const stageMap = {};
@@ -1258,7 +1293,23 @@ const Dashboard = () => {
                         </span>
                       </div>
                       <p className="text-xs text-blue-400 font-semibold mb-2">Academic Year: {drive.academicYear || '2025-2026'}</p>
-                      <p className="text-gray-400 text-sm mb-4 line-clamp-2">{drive.description || 'No description provided.'}</p>
+                      <p className="text-gray-400 text-sm mb-3 line-clamp-2">{drive.description || 'No description provided.'}</p>
+
+                      {/* Participating Organizations */}
+                      <div className="bg-gray-900/60 p-2.5 rounded-xl border border-gray-700/60 mb-4 text-xs">
+                        <span className="text-gray-400 font-semibold block mb-1">🏢 Participating Organizations:</span>
+                        {getParticipatingCompaniesForDrive(drive._id).length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {getParticipatingCompaniesForDrive(drive._id).map((c, i) => (
+                              <span key={i} className="px-2 py-0.5 bg-blue-950 text-blue-300 rounded font-medium border border-blue-800/60">
+                                {c}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-gray-500 italic">No position postings yet</span>
+                        )}
+                      </div>
                     </div>
 
                     <div className="pt-4 border-t border-gray-700 flex justify-between items-center">
@@ -1424,6 +1475,39 @@ const Dashboard = () => {
                   </table>
                 </div>
               </div>
+
+              {/* Organization-wise Hiring Statistics Table */}
+              <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
+                <h3 className="text-xl font-bold text-white mb-4">Organization-wise Hiring Statistics</h3>
+                <div className="overflow-x-auto rounded-xl border border-gray-700">
+                  <table className="w-full text-left text-sm text-gray-300">
+                    <thead className="bg-gray-900/70 text-gray-200 border-b border-gray-700">
+                      <tr>
+                        <th className="px-6 py-4">Participating Organization</th>
+                        <th className="px-6 py-4">Drive Positions</th>
+                        <th className="px-6 py-4">Candidate Applications</th>
+                        <th className="px-6 py-4">Selected / Hired</th>
+                        <th className="px-6 py-4">Hiring Success Rate</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-700 bg-gray-800/40">
+                      {orgStats.map(org => {
+                        const hireRate = org.applications > 0 ? Math.round((org.selected / org.applications) * 100) : 0;
+                        return (
+                          <tr key={org.name} className="hover:bg-gray-700/40">
+                            <td className="px-6 py-4 font-bold text-white">{org.name}</td>
+                            <td className="px-6 py-4 text-purple-400 font-semibold">{org.positions}</td>
+                            <td className="px-6 py-4 text-blue-400 font-semibold">{org.applications}</td>
+                            <td className="px-6 py-4 text-green-400 font-semibold">{org.selected}</td>
+                            <td className="px-6 py-4 font-bold text-cyan-400">{hireRate}%</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
             </div>
           )}
         </div>

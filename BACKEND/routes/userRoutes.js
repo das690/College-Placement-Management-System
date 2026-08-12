@@ -17,10 +17,17 @@ const generateToken = (id) => {
 // @access  Public
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password, role, adminCode } = req.body;
 
     if (!name || !email || !password) {
       return res.status(400).json({ message: 'Please add all required fields' });
+    }
+
+    if (role === 'admin') {
+      const validAdminCode = process.env.ADMIN_SECRET || 'GUVI-ADMIN';
+      if (adminCode !== validAdminCode) {
+        return res.status(403).json({ message: 'Invalid Admin Passcode' });
+      }
     }
 
     // Check if user exists
@@ -38,7 +45,16 @@ router.post('/register', async (req, res) => {
       name,
       email,
       password: hashedPassword,
-      role: role || 'student', // Default to student if not provided
+      role: role || 'student',
+      academicDetails: (role === 'student' || !role) ? {
+        department: '',
+        graduationYear: 2026,
+        cgpa: null,
+        activeBacklogs: 0,
+        skills: [],
+        certifications: [],
+        resumeUrl: ''
+      } : undefined
     });
 
     if (user) {
