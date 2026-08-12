@@ -23,9 +23,18 @@ const localStorage = multer.diskStorage({
   }
 });
 
+const fileFilter = (req, file, cb) => {
+  if (file.mimetype === 'application/pdf' || file.originalname.toLowerCase().endsWith('.pdf')) {
+    cb(null, true);
+  } else {
+    cb(new Error('Only PDF resume files (.pdf) are allowed'), false);
+  }
+};
+
 const localUpload = multer({
   storage: localStorage,
-  limits: { fileSize: 10 * 1024 * 1024 }
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: fileFilter
 });
 
 // Try loading Cloudinary config
@@ -64,7 +73,7 @@ router.post('/', protect, (req, res) => {
 function fallbackToLocal(req, res) {
   localUpload.single('resume')(req, res, (err) => {
     if (err) {
-      return res.status(500).json({ message: 'Error uploading file: ' + err.message });
+      return res.status(400).json({ message: 'Error uploading file: ' + err.message });
     }
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded or invalid file format' });
@@ -76,7 +85,8 @@ function fallbackToLocal(req, res) {
     
     return res.status(200).json({
       message: 'Resume uploaded successfully',
-      resumeUrl
+      resumeUrl,
+      filename: req.file.filename
     });
   });
 }

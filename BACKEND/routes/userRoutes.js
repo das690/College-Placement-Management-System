@@ -121,14 +121,21 @@ router.put('/profile', protect, async (req, res) => {
     }
 
     // Update the academic details object
+    const existingDetails = user.academicDetails || {};
     user.academicDetails = {
-      department: req.body.department || user.academicDetails?.department,
-      graduationYear: req.body.graduationYear ? Number(req.body.graduationYear) : user.academicDetails?.graduationYear,
-      cgpa: req.body.cgpa ? Number(req.body.cgpa) : user.academicDetails?.cgpa,
-      activeBacklogs: req.body.activeBacklogs !== undefined ? Number(req.body.activeBacklogs) : (user.academicDetails?.activeBacklogs || 0),
+      department: req.body.department !== undefined ? req.body.department : existingDetails.department,
+      graduationYear: (req.body.graduationYear !== undefined && req.body.graduationYear !== '') 
+        ? Number(req.body.graduationYear) 
+        : existingDetails.graduationYear,
+      cgpa: (req.body.cgpa !== undefined && req.body.cgpa !== null && req.body.cgpa !== '') 
+        ? Number(req.body.cgpa) 
+        : existingDetails.cgpa,
+      activeBacklogs: req.body.activeBacklogs !== undefined 
+        ? Number(req.body.activeBacklogs) 
+        : (existingDetails.activeBacklogs || 0),
       skills: skillsArray,
       certifications: certsArray,
-      resumeUrl: req.body.resumeUrl || user.academicDetails?.resumeUrl || ''
+      resumeUrl: req.body.resumeUrl !== undefined ? req.body.resumeUrl : (existingDetails.resumeUrl || '')
     };
     
     const updatedUser = await user.save();

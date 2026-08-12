@@ -100,6 +100,18 @@ const Dashboard = () => {
   const [selectedAppForInterview, setSelectedAppForInterview] = useState(null);
   const [interviewDetails, setInterviewDetails] = useState({ date: '', time: '', link: '', stage: 'Technical Interview' });
 
+  // Quick-Fill Missing Profile Modal State
+  const [showQuickProfileModal, setShowQuickProfileModal] = useState(false);
+  const [quickProfileData, setQuickProfileData] = useState({ 
+    department: '', 
+    graduationYear: 2026, 
+    cgpa: '', 
+    activeBacklogs: 0,
+    resumeUrl: ''
+  });
+  const [quickResumeFile, setQuickResumeFile] = useState(null);
+  const [isQuickSaving, setIsQuickSaving] = useState(false);
+
   // Sync Student Profile on User Load
   useEffect(() => {
     if (user && user.academicDetails) {
@@ -110,6 +122,13 @@ const Dashboard = () => {
         activeBacklogs: user.academicDetails.activeBacklogs || 0,
         skills: Array.isArray(user.academicDetails.skills) ? user.academicDetails.skills.join(', ') : '',
         certifications: Array.isArray(user.academicDetails.certifications) ? user.academicDetails.certifications.join(', ') : '',
+        resumeUrl: user.academicDetails.resumeUrl || ''
+      });
+      setQuickProfileData({
+        department: user.academicDetails.department || '',
+        graduationYear: user.academicDetails.graduationYear || 2026,
+        cgpa: user.academicDetails.cgpa !== undefined ? user.academicDetails.cgpa : '',
+        activeBacklogs: user.academicDetails.activeBacklogs || 0,
         resumeUrl: user.academicDetails.resumeUrl || ''
       });
     }
@@ -214,13 +233,31 @@ const Dashboard = () => {
       setIsUploadingProfileResume(true);
       const formData = new FormData();
       formData.append('resume', file);
-      const res = await API.post('/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      });
+      
+      // Post FormData without manual header to let Axios set correct boundary
+      const res = await API.post('/upload', formData);
       const uploadedUrl = res.data.resumeUrl;
+
       setStudentProfile(prev => ({ ...prev, resumeUrl: uploadedUrl }));
-      toast.success("Resume PDF uploaded! Click 'Save Academic Profile' to save your profile.");
+      setQuickProfileData(prev => ({ ...prev, resumeUrl: uploadedUrl }));
+
+      // Auto-save to User profile in DB immediately
+      const updatedUserRes = await API.put('/users/profile', {
+        department: studentProfile.department || user.academicDetails?.department,
+        graduationYear: Number(studentProfile.graduationYear || user.academicDetails?.graduationYear || 2026),
+        cgpa: studentProfile.cgpa !== '' ? Number(studentProfile.cgpa) : user.academicDetails?.cgpa,
+        activeBacklogs: Number(studentProfile.activeBacklogs || 0),
+        skills: studentProfile.skills,
+        certifications: studentProfile.certifications,
+        resumeUrl: uploadedUrl
+      });
+
+      if (setUser) setUser(updatedUserRes.data);
+      localStorage.setItem('user', JSON.stringify(updatedUserRes.data));
+
+      toast.success("Resume PDF uploaded & saved to academic profile!");
       setProfileResumeFile(null);
+      fetchData();
       return uploadedUrl;
     } catch (error) {
       toast.error(error.response?.data?.message || "Failed to upload resume file");
@@ -378,6 +415,47 @@ const Dashboard = () => {
     }
   };
 
+  const handleSaveQuickProfile = async (e) => {
+    e.preventDefault();
+    try {
+      setIsQuickSaving(true);
+      let uploadedResumeUrl = quickProfileData.resumeUrl || user.academicDetails?.resumeUrl || '';
+
+      if (quickResumeFile) {
+        const formData = new FormData();
+        formData.append('resume', quickResumeFile);
+        const uploadRes = await API.post('/upload', formData);
+        uploadedResumeUrl = uploadRes.data.resumeUrl;
+      }
+
+      if (!uploadedResumeUrl) {
+        setIsQuickSaving(false);
+        return toast.error("Please upload a PDF resume or provide a resume link");
+      }
+
+      const payload = {
+        department: quickProfileData.department,
+        graduationYear: Number(quickProfileData.graduationYear),
+        cgpa: Number(quickProfileData.cgpa),
+        activeBacklogs: Number(quickProfileData.activeBacklogs || 0),
+        skills: studentProfile.skills || user.academicDetails?.skills || '',
+        certifications: studentProfile.certifications || user.academicDetails?.certifications || '',
+        resumeUrl: uploadedResumeUrl
+      };
+
+      const res = await API.put('/users/profile', payload);
+      toast.success("Academic Profile configured successfully!");
+      if (setUser) setUser(res.data);
+      localStorage.setItem('user', JSON.stringify(res.data));
+      setShowQuickProfileModal(false);
+      fetchData();
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Failed to save profile details");
+    } finally {
+      setIsQuickSaving(false);
+    }
+  };
+
   const handleWithdrawApplication = async (appId) => {
     if (!window.confirm("Withdraw your application from this drive position?")) return;
     try {
@@ -407,7 +485,7 @@ const Dashboard = () => {
       if (resumeFile) {
         const formData = new FormData();
         formData.append('resume', resumeFile);
-        const uploadRes = await API.post('/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+        const uploadRes = await API.post('/upload', formData);
         finalResumeUrl = uploadRes.data.resumeUrl;
 
         // Auto update student profile resume URL
@@ -960,19 +1038,42 @@ const Dashboard = () => {
                             </div>
                           )}
 
-                          <button 
-                            onClick={() => setSelectedJobForApply(job)} 
-                            disabled={applied || !eligibilityResult.eligible} 
-                            className={`w-full font-bold py-3 rounded-xl transition-all shadow-md ${
-                              applied 
-                                ? 'bg-gray-700 text-gray-400 cursor-not-allowed' 
-                                : !eligibilityResult.eligible
-                                ? 'bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed'
-                                : 'bg-blue-600 hover:bg-blue-500 text-white'
-                            }`}
-                          >
-                            {applied ? '✓ Applied' : !eligibilityResult.eligible ? 'Ineligible to Apply' : 'Apply for Position'}
-                          </button>
+                          {eligibilityResult.eligible ? (
+                            <button 
+                              onClick={() => setSelectedJobForApply(job)} 
+                              disabled={applied} 
+                              className={`w-full font-bold py-3 rounded-xl transition-all shadow-md ${
+                                applied 
+                                  ? 'bg-gray-700 text-gray-400 cursor-not-allowed' 
+                                  : 'bg-blue-600 hover:bg-blue-500 text-white'
+                              }`}
+                            >
+                              {applied ? '✓ Applied' : 'Apply for Position'}
+                            </button>
+                          ) : getMissingAcademicFields(user).length > 0 ? (
+                            <button 
+                              onClick={() => {
+                                setQuickProfileData({
+                                  department: studentProfile.department || user.academicDetails?.department || '',
+                                  graduationYear: studentProfile.graduationYear || user.academicDetails?.graduationYear || 2026,
+                                  cgpa: studentProfile.cgpa !== '' ? studentProfile.cgpa : (user.academicDetails?.cgpa !== undefined ? user.academicDetails.cgpa : ''),
+                                  activeBacklogs: studentProfile.activeBacklogs !== undefined ? studentProfile.activeBacklogs : (user.academicDetails?.activeBacklogs || 0),
+                                  resumeUrl: studentProfile.resumeUrl || user.academicDetails?.resumeUrl || ''
+                                });
+                                setShowQuickProfileModal(true);
+                              }}
+                              className="w-full bg-yellow-600 hover:bg-yellow-500 text-gray-950 font-bold py-3 rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 text-xs"
+                            >
+                              ⚡ Fill Missing Profile Details to Apply
+                            </button>
+                          ) : (
+                            <button 
+                              disabled 
+                              className="w-full bg-gray-800 text-gray-500 border border-gray-700 font-bold py-3 rounded-xl cursor-not-allowed text-xs"
+                            >
+                              Ineligible to Apply
+                            </button>
+                          )}
                         </div>
                       </div>
                     );
@@ -1557,6 +1658,126 @@ const Dashboard = () => {
               <div className="flex gap-3 pt-4">
                 <button type="button" onClick={() => { setShowInterviewModal(false); setSelectedAppForInterview(null); }} className="flex-1 px-4 py-2.5 bg-gray-700 text-gray-200 rounded-xl font-semibold hover:bg-gray-600">Cancel</button>
                 <button type="submit" className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-500">Send Invite</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* QUICK-FILL MISSING ACADEMIC PROFILE MODAL */}
+      {showQuickProfileModal && (
+        <div className="fixed inset-0 pt-16 bg-black/80 backdrop-blur-md flex items-center justify-center z-50 animate-fade-in p-4 overflow-y-auto">
+          <div className="bg-gray-800 p-6 md:p-8 rounded-2xl border border-yellow-500/50 max-w-lg w-full shadow-2xl space-y-5 my-auto">
+            <div className="border-b border-gray-700 pb-3">
+              <span className="text-xs font-bold uppercase tracking-wider text-yellow-400 bg-yellow-950/80 px-2.5 py-1 rounded border border-yellow-800">
+                Action Required
+              </span>
+              <h3 className="text-xl font-bold text-white mt-2">Configure Missing Academic Profile</h3>
+              <p className="text-gray-300 text-xs mt-1">
+                Please fill in the missing details below to satisfy placement drive eligibility checks and proceed with your application.
+              </p>
+            </div>
+
+            <form onSubmit={handleSaveQuickProfile} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-300 mb-1 flex justify-between">
+                    <span>Department</span>
+                    {(!quickProfileData.department) && <span className="text-red-400 font-bold text-[10px]">✕ Missing</span>}
+                  </label>
+                  <select 
+                    required
+                    value={quickProfileData.department}
+                    onChange={(e) => setQuickProfileData({...quickProfileData, department: e.target.value})}
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-xl text-white text-xs outline-none focus:border-yellow-500"
+                  >
+                    <option value="">-- Select Department --</option>
+                    {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-300 mb-1 flex justify-between">
+                    <span>Graduation Year</span>
+                    {(!quickProfileData.graduationYear) && <span className="text-red-400 font-bold text-[10px]">✕ Missing</span>}
+                  </label>
+                  <input 
+                    type="number" 
+                    required
+                    value={quickProfileData.graduationYear}
+                    onChange={(e) => setQuickProfileData({...quickProfileData, graduationYear: e.target.value})}
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-xl text-white text-xs outline-none focus:border-yellow-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-300 mb-1 flex justify-between">
+                    <span>CGPA (0 - 10)</span>
+                    {(quickProfileData.cgpa === '' || quickProfileData.cgpa === undefined) && <span className="text-red-400 font-bold text-[10px]">✕ Missing</span>}
+                  </label>
+                  <input 
+                    type="number" 
+                    step="0.01"
+                    max="10"
+                    min="0"
+                    required
+                    placeholder="e.g. 8.5"
+                    value={quickProfileData.cgpa}
+                    onChange={(e) => setQuickProfileData({...quickProfileData, cgpa: e.target.value})}
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-xl text-white text-xs outline-none focus:border-yellow-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">Active Backlogs</label>
+                  <input 
+                    type="number" 
+                    min="0"
+                    required
+                    value={quickProfileData.activeBacklogs}
+                    onChange={(e) => setQuickProfileData({...quickProfileData, activeBacklogs: e.target.value})}
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-xl text-white text-xs outline-none focus:border-yellow-500"
+                  />
+                </div>
+              </div>
+
+              <div className="bg-gray-900/80 p-4 rounded-xl border border-gray-700/80 space-y-2">
+                <label className="block text-xs font-bold text-yellow-400 flex justify-between items-center">
+                  <span>Upload PDF Resume</span>
+                  {(!quickProfileData.resumeUrl && !user.academicDetails?.resumeUrl) && (
+                    <span className="text-red-400 font-bold text-[10px]">✕ Missing</span>
+                  )}
+                </label>
+                
+                <input 
+                  type="file" 
+                  accept=".pdf" 
+                  onChange={(e) => setQuickResumeFile(e.target.files[0])}
+                  className="w-full bg-gray-800 p-2 rounded-xl text-gray-300 text-xs border border-gray-600 file:mr-3 file:py-1 file:px-2.5 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-yellow-500 file:text-gray-950 hover:file:bg-yellow-400 cursor-pointer"
+                />
+
+                {(quickProfileData.resumeUrl || user.academicDetails?.resumeUrl) && (
+                  <p className="text-[11px] text-green-400 font-semibold flex items-center gap-1">
+                    ✓ Profile Resume already attached. (Selecting a new file will replace it)
+                  </p>
+                )}
+              </div>
+
+              <div className="flex gap-3 pt-3">
+                <button 
+                  type="button" 
+                  onClick={() => setShowQuickProfileModal(false)}
+                  className="flex-1 px-4 py-2.5 bg-gray-700 text-gray-200 rounded-xl text-xs font-semibold hover:bg-gray-600 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  disabled={isQuickSaving}
+                  className="flex-1 px-4 py-2.5 bg-yellow-500 hover:bg-yellow-400 text-gray-950 rounded-xl text-xs font-bold shadow-lg transition-colors disabled:opacity-50"
+                >
+                  {isQuickSaving ? 'Saving Profile...' : 'Save & Unlock Application'}
+                </button>
               </div>
             </form>
           </div>
