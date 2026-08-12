@@ -3,11 +3,14 @@ const dotenv = require('dotenv');
 const cors = require('cors');
 const connectDB = require('./config/db'); 
 
+const path = require('path');
+
 // Import Routes
 const userRoutes = require('./routes/userRoutes');
 const jobRoutes = require('./routes/jobRoutes');
 const applicationRoutes = require('./routes/applicationRoutes');
-const driveRoutes = require('./routes/driveRoutes'); // NEW: Drive Routes
+const driveRoutes = require('./routes/driveRoutes');
+const uploadRoutes = require('./routes/uploadRoutes');
 
 dotenv.config();
 
@@ -19,6 +22,7 @@ const app = express();
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // ==========================================
 // API Routes
@@ -26,7 +30,8 @@ app.use(express.json());
 app.use('/api/users', userRoutes);
 app.use('/api/jobs', jobRoutes);
 app.use('/api/applications', applicationRoutes);
-app.use('/api/drives', driveRoutes); // NEW: Mounting the Drive Routes
+app.use('/api/drives', driveRoutes);
+app.use('/api/upload', uploadRoutes);
 
 // Standard Error Handler (Optional but recommended)
 app.use((err, req, res, next) => {

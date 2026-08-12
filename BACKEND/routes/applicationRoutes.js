@@ -53,9 +53,17 @@ router.post('/', protect, async (req, res) => {
     const student = await User.findById(req.user.id);
     const { academicDetails } = student;
 
-    // 2. Profile Completion Check
-    if (!academicDetails || !academicDetails.department || !academicDetails.cgpa || !academicDetails.graduationYear) {
-       return res.status(400).json({ message: 'You must complete your academic profile (CGPA, Department, Graduation Year) before applying.' });
+    // 2. Detailed Profile Completion Check
+    const missing = [];
+    if (!academicDetails?.department) missing.push('Department');
+    if (academicDetails?.cgpa === undefined || academicDetails?.cgpa === null || academicDetails?.cgpa === '') missing.push('CGPA');
+    if (!academicDetails?.graduationYear) missing.push('Graduation Year');
+    if (!resumeUrl && !academicDetails?.resumeUrl) missing.push('Resume PDF');
+
+    if (missing.length > 0) {
+       return res.status(400).json({ 
+         message: `Academic profile incomplete. Missing required field(s): ${missing.join(', ')}. Please update your profile before applying.` 
+       });
     }
 
     // 3. ELIGIBILITY ENGINE CHECKS

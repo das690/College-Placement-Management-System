@@ -1,8 +1,15 @@
 import axios from 'axios';
 
-// This tells React: "If we are live, use Render. If we are testing locally, use localhost."
+const getBaseURL = () => {
+  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
+  if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
+    return 'http://localhost:5000/api';
+  }
+  return 'https://college-placement-management-system-30p4.onrender.com/api';
+};
+
 const API = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'https://college-placement-management-system-30p4.onrender.com/api',
+  baseURL: getBaseURL(),
 });
 
 // Attach token to requests

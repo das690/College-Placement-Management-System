@@ -25,6 +25,17 @@ const DEPARTMENTS = [
   'Data Science & AI'
 ];
 
+const getMissingAcademicFields = (u) => {
+  if (!u || u.role !== 'student') return [];
+  const details = u.academicDetails || {};
+  const missing = [];
+  if (!details.department || String(details.department).trim() === '') missing.push('Department');
+  if (details.cgpa === undefined || details.cgpa === null || String(details.cgpa).trim() === '') missing.push('CGPA');
+  if (!details.graduationYear) missing.push('Graduation Year');
+  if (!details.resumeUrl || String(details.resumeUrl).trim() === '') missing.push('Resume PDF');
+  return missing;
+};
+
 const Dashboard = () => {
   const { user, setUser } = useContext(AuthContext);
   const navigate = useNavigate();
@@ -61,6 +72,10 @@ const Dashboard = () => {
     certifications: '',
     resumeUrl: ''
   });
+
+  // Student Profile Resume Upload State
+  const [profileResumeFile, setProfileResumeFile] = useState(null);
+  const [isUploadingProfileResume, setIsUploadingProfileResume] = useState(false);
 
   // Position Creation State (Company / Admin)
   const [newJob, setNewJob] = useState({
@@ -151,25 +166,28 @@ const Dashboard = () => {
     const details = user.academicDetails || {};
     const reasons = [];
 
-    // Profile completion check
-    if (!details.department || !details.cgpa || !details.graduationYear) {
-      return { eligible: false, reasons: ['Academic profile incomplete (CGPA, Department & Graduation Year required)'] };
+    // Detailed Profile completion check
+    const missingFields = getMissingAcademicFields(user);
+    if (missingFields.length > 0) {
+      reasons.push(`Academic Profile Incomplete: Missing (${missingFields.join(', ')})`);
     }
 
     const { minCgpa = 0, maxBacklogs = 0, allowedDepartments = [], targetGraduationYear } = job.eligibility || {};
 
     // 1. CGPA Check
-    if (minCgpa > 0 && Number(details.cgpa) < minCgpa) {
-      reasons.push(`Minimum CGPA required: ${minCgpa} (Yours: ${details.cgpa})`);
+    if (details.cgpa !== undefined && details.cgpa !== null && details.cgpa !== '') {
+      if (minCgpa > 0 && Number(details.cgpa) < minCgpa) {
+        reasons.push(`Minimum CGPA required: ${minCgpa} (Yours: ${details.cgpa})`);
+      }
     }
 
     // 2. Active Backlogs Check
-    if (details.activeBacklogs > maxBacklogs) {
+    if (details.activeBacklogs !== undefined && Number(details.activeBacklogs) > maxBacklogs) {
       reasons.push(`Maximum backlogs allowed: ${maxBacklogs} (Yours: ${details.activeBacklogs})`);
     }
 
     // 3. Department Check
-    if (allowedDepartments && allowedDepartments.length > 0) {
+    if (allowedDepartments && allowedDepartments.length > 0 && details.department) {
       const match = allowedDepartments.some(dept => 
         dept.toLowerCase().trim() === (details.department || '').toLowerCase().trim()
       );
@@ -179,7 +197,7 @@ const Dashboard = () => {
     }
 
     // 4. Graduation Year Check
-    if (targetGraduationYear && Number(details.graduationYear) !== Number(targetGraduationYear)) {
+    if (targetGraduationYear && details.graduationYear && Number(details.graduationYear) !== Number(targetGraduationYear)) {
       reasons.push(`Target Graduation Year: ${targetGraduationYear} (Yours: ${details.graduationYear})`);
     }
 
@@ -187,6 +205,28 @@ const Dashboard = () => {
       eligible: reasons.length === 0,
       reasons
     };
+  };
+
+  const handleUploadProfileResume = async (fileToUpload) => {
+    const file = fileToUpload || profileResumeFile;
+    if (!file) return toast.error("Please select a PDF resume file to upload");
+    try {
+      setIsUploadingProfileResume(true);
+      const formData = new FormData();
+      formData.append('resume', file);
+      const res = await API.post('/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      const uploadedUrl = res.data.resumeUrl;
+      setStudentProfile(prev => ({ ...prev, resumeUrl: uploadedUrl }));
+      toast.success("Resume PDF uploaded! Click 'Save Academic Profile' to save your profile.");
+      setProfileResumeFile(null);
+      return uploadedUrl;
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Failed to upload resume file");
+    } finally {
+      setIsUploadingProfileResume(false);
+    }
   };
 
   // ================= ADMIN & COMPANY HANDLERS =================
@@ -369,6 +409,15 @@ const Dashboard = () => {
         formData.append('resume', resumeFile);
         const uploadRes = await API.post('/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
         finalResumeUrl = uploadRes.data.resumeUrl;
+
+        // Auto update student profile resume URL
+        try {
+          const profileRes = await API.put('/users/profile', { resumeUrl: finalResumeUrl });
+          if (setUser) setUser(profileRes.data);
+          localStorage.setItem('user', JSON.stringify(profileRes.data));
+        } catch(e) {
+          console.warn("Could not auto-update profile resume URL", e);
+        }
       }
 
       if (!finalResumeUrl) {
@@ -593,16 +642,29 @@ const Dashboard = () => {
         <div className="space-y-8">
           
           {/* PROFILE INCOMPLETE WARNING BANNER */}
-          {(!user.academicDetails || !user.academicDetails.cgpa || !user.academicDetails.department) && (
-            <div className="bg-gradient-to-r from-yellow-950/60 to-gray-800 border border-yellow-600/50 p-6 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4 shadow-xl">
-              <div className="flex items-center gap-4">
-                <div className="p-3 bg-yellow-900/40 rounded-xl text-yellow-400"><svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg></div>
+          {user.role === 'student' && getMissingAcademicFields(user).length > 0 && (
+            <div className="bg-gradient-to-r from-yellow-950/80 to-red-950/50 border border-yellow-600/60 p-6 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-xl">
+              <div className="flex items-start gap-4">
+                <div className="p-3 bg-yellow-900/40 rounded-xl text-yellow-400 shrink-0 mt-1 md:mt-0">
+                  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                </div>
                 <div>
-                  <h3 className="text-lg font-bold text-white">Action Required: Complete Academic Profile</h3>
-                  <p className="text-gray-300 text-sm">You must configure your CGPA, Department, and Graduation Year for eligibility validation.</p>
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    Action Required: Configure Academic Profile
+                  </h3>
+                  <p className="text-gray-300 text-sm mt-1">
+                    Your profile is incomplete. To apply for placement drive opportunities, please configure the following missing item(s):
+                  </p>
+                  <div className="flex flex-wrap gap-2 mt-2.5">
+                    {getMissingAcademicFields(user).map(field => (
+                      <span key={field} className="px-3 py-1 bg-red-900/70 text-red-300 border border-red-700/80 rounded-lg text-xs font-bold flex items-center gap-1">
+                        ⚠️ Missing: {field}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               </div>
-              <button onClick={() => navigate('/dashboard/profile')} className="px-5 py-2.5 bg-yellow-500 hover:bg-yellow-400 text-gray-950 font-bold rounded-xl whitespace-nowrap transition-colors">
+              <button onClick={() => navigate('/dashboard/profile')} className="px-5 py-2.5 bg-yellow-500 hover:bg-yellow-400 text-gray-950 font-bold rounded-xl whitespace-nowrap transition-colors shadow-lg shrink-0">
                 Configure Profile &rarr;
               </button>
             </div>
@@ -654,17 +716,44 @@ const Dashboard = () => {
               <div className="flex justify-between items-center mb-6 pb-4 border-b border-gray-700">
                 <div>
                   <h2 className="text-2xl font-bold text-white">Student Academic Profile</h2>
-                  <p className="text-gray-400 text-sm">Required for Placement Drive eligibility verification and reporting</p>
+                  <p className="text-gray-400 text-sm">Required for Placement Drive eligibility verification and drive reporting</p>
                 </div>
                 <span className="px-3 py-1 bg-blue-900/50 text-blue-300 text-xs font-semibold rounded-full border border-blue-800">
                   Graduation Year: {studentProfile.graduationYear || 2026}
                 </span>
               </div>
 
+              {/* Profile Completion Checklist */}
+              <div className="mb-6 p-4 rounded-xl border bg-gray-900/60 border-gray-700">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-xs font-bold uppercase text-gray-400">Profile Completion Status</span>
+                  <span className="text-xs font-bold text-blue-400">
+                    {4 - getMissingAcademicFields(user).length} of 4 Core Details Configured
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <span className={`px-2.5 py-1 text-xs font-bold rounded-lg border ${studentProfile.department ? 'bg-green-950 text-green-400 border-green-800' : 'bg-red-950 text-red-400 border-red-800'}`}>
+                    {studentProfile.department ? '✓ Department' : '✕ Missing Department'}
+                  </span>
+                  <span className={`px-2.5 py-1 text-xs font-bold rounded-lg border ${studentProfile.cgpa !== '' && studentProfile.cgpa !== undefined ? 'bg-green-950 text-green-400 border-green-800' : 'bg-red-950 text-red-400 border-red-800'}`}>
+                    {studentProfile.cgpa !== '' && studentProfile.cgpa !== undefined ? '✓ CGPA' : '✕ Missing CGPA'}
+                  </span>
+                  <span className={`px-2.5 py-1 text-xs font-bold rounded-lg border ${studentProfile.graduationYear ? 'bg-green-950 text-green-400 border-green-800' : 'bg-red-950 text-red-400 border-red-800'}`}>
+                    {studentProfile.graduationYear ? '✓ Graduation Year' : '✕ Missing Graduation Year'}
+                  </span>
+                  <span className={`px-2.5 py-1 text-xs font-bold rounded-lg border ${studentProfile.resumeUrl ? 'bg-green-950 text-green-400 border-green-800' : 'bg-red-950 text-red-400 border-red-800'}`}>
+                    {studentProfile.resumeUrl ? '✓ Resume PDF' : '✕ Missing Resume PDF'}
+                  </span>
+                </div>
+              </div>
+
               <form onSubmit={handleSaveProfile} className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                   <div>
-                    <label className="block text-sm font-semibold text-gray-300 mb-1.5">Department / Program</label>
+                    <label className="block text-sm font-semibold text-gray-300 mb-1.5 flex items-center justify-between">
+                      <span>Department / Program</span>
+                      {!studentProfile.department && <span className="text-xs text-red-400 font-bold">✕ Missing</span>}
+                    </label>
                     <select 
                       required 
                       value={studentProfile.department} 
@@ -676,7 +765,10 @@ const Dashboard = () => {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-semibold text-gray-300 mb-1.5">Graduation Year</label>
+                    <label className="block text-sm font-semibold text-gray-300 mb-1.5 flex items-center justify-between">
+                      <span>Graduation Year</span>
+                      {!studentProfile.graduationYear && <span className="text-xs text-red-400 font-bold">✕ Missing</span>}
+                    </label>
                     <input 
                       type="number" 
                       required 
@@ -686,7 +778,10 @@ const Dashboard = () => {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-semibold text-gray-300 mb-1.5">Cumulative CGPA</label>
+                    <label className="block text-sm font-semibold text-gray-300 mb-1.5 flex items-center justify-between">
+                      <span>Cumulative CGPA</span>
+                      {(studentProfile.cgpa === '' || studentProfile.cgpa === undefined) && <span className="text-xs text-red-400 font-bold">✕ Missing</span>}
+                    </label>
                     <input 
                       type="number" 
                       step="0.01" 
@@ -732,15 +827,47 @@ const Dashboard = () => {
                       className="w-full px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500" 
                     />
                   </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-300 mb-1.5">Default Resume Link (PDF URL)</label>
-                    <input 
-                      type="url" 
-                      placeholder="https://cloudinary.com/.../resume.pdf"
-                      value={studentProfile.resumeUrl} 
-                      onChange={(e) => setStudentProfile({...studentProfile, resumeUrl: e.target.value})}
-                      className="w-full px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500" 
-                    />
+
+                  {/* RESUME PDF UPLOAD CONTAINER */}
+                  <div className="bg-gray-900/80 p-5 rounded-2xl border border-gray-700/80 space-y-3">
+                    <div className="flex justify-between items-center">
+                      <label className="block text-sm font-bold text-blue-400 flex items-center gap-2">
+                        <span>Upload Academic Resume (PDF File)</span>
+                        {!studentProfile.resumeUrl && <span className="text-xs text-red-400 font-bold">✕ Missing</span>}
+                      </label>
+                      {studentProfile.resumeUrl && (
+                        <a href={studentProfile.resumeUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:text-blue-300 underline font-semibold flex items-center gap-1">
+                          📄 View Current Resume
+                        </a>
+                      )}
+                    </div>
+                    
+                    <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+                      <input 
+                        type="file" 
+                        accept=".pdf" 
+                        onChange={(e) => {
+                          const file = e.target.files[0];
+                          if (file) handleUploadProfileResume(file);
+                        }} 
+                        disabled={isUploadingProfileResume}
+                        className="w-full bg-gray-800 p-2.5 rounded-xl text-gray-300 text-xs border border-gray-600 file:mr-4 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer disabled:opacity-50" 
+                      />
+                    </div>
+                    {isUploadingProfileResume && (
+                      <p className="text-xs text-blue-400 font-semibold animate-pulse">Uploading PDF Resume to Portal...</p>
+                    )}
+                    
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-400 mb-1">Resume Document URL (Auto-filled on upload)</label>
+                      <input 
+                        type="url" 
+                        placeholder="https://.../resume.pdf"
+                        value={studentProfile.resumeUrl} 
+                        onChange={(e) => setStudentProfile({...studentProfile, resumeUrl: e.target.value})}
+                        className="w-full px-4 py-2 bg-gray-900 border border-gray-700 rounded-xl text-white text-xs outline-none focus:border-blue-500" 
+                      />
+                    </div>
                   </div>
                 </div>
 
