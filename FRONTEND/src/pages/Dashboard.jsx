@@ -243,17 +243,18 @@ const Dashboard = () => {
 
       // Auto-save to User profile in DB immediately
       const updatedUserRes = await API.put('/users/profile', {
-        department: studentProfile.department || user.academicDetails?.department,
+        department: studentProfile.department || user.academicDetails?.department || '',
         graduationYear: Number(studentProfile.graduationYear || user.academicDetails?.graduationYear || 2026),
-        cgpa: studentProfile.cgpa !== '' ? Number(studentProfile.cgpa) : user.academicDetails?.cgpa,
+        cgpa: (studentProfile.cgpa !== '' && studentProfile.cgpa !== undefined && studentProfile.cgpa !== null) ? Number(studentProfile.cgpa) : user.academicDetails?.cgpa,
         activeBacklogs: Number(studentProfile.activeBacklogs || 0),
         skills: studentProfile.skills,
         certifications: studentProfile.certifications,
         resumeUrl: uploadedUrl
       });
 
-      if (setUser) setUser(updatedUserRes.data);
-      localStorage.setItem('user', JSON.stringify(updatedUserRes.data));
+      const updatedUser = { ...updatedUserRes.data, token: user?.token || localStorage.getItem('token') };
+      if (setUser) setUser(updatedUser);
+      localStorage.setItem('user', JSON.stringify(updatedUser));
 
       toast.success("Resume PDF uploaded & saved to academic profile!");
       setProfileResumeFile(null);
@@ -399,16 +400,17 @@ const Dashboard = () => {
       const payload = {
         department: studentProfile.department,
         graduationYear: Number(studentProfile.graduationYear),
-        cgpa: Number(studentProfile.cgpa),
-        activeBacklogs: Number(studentProfile.activeBacklogs),
+        cgpa: (studentProfile.cgpa !== '' && studentProfile.cgpa !== undefined && studentProfile.cgpa !== null) ? Number(studentProfile.cgpa) : null,
+        activeBacklogs: Number(studentProfile.activeBacklogs || 0),
         skills: studentProfile.skills,
         certifications: studentProfile.certifications,
-        resumeUrl: studentProfile.resumeUrl
+        resumeUrl: studentProfile.resumeUrl || user.academicDetails?.resumeUrl || ''
       };
       const res = await API.put('/users/profile', payload);
       toast.success("Academic Profile saved successfully!");
-      if (setUser) setUser(res.data);
-      localStorage.setItem('user', JSON.stringify(res.data));
+      const updatedUser = { ...res.data, token: user?.token || localStorage.getItem('token') };
+      if (setUser) setUser(updatedUser);
+      localStorage.setItem('user', JSON.stringify(updatedUser));
       fetchData();
     } catch (error) {
       toast.error(error.response?.data?.message || "Failed to save academic profile");
@@ -419,7 +421,7 @@ const Dashboard = () => {
     e.preventDefault();
     try {
       setIsQuickSaving(true);
-      let uploadedResumeUrl = quickProfileData.resumeUrl || user.academicDetails?.resumeUrl || '';
+      let uploadedResumeUrl = quickProfileData.resumeUrl || studentProfile.resumeUrl || user.academicDetails?.resumeUrl || '';
 
       if (quickResumeFile) {
         const formData = new FormData();
@@ -445,8 +447,9 @@ const Dashboard = () => {
 
       const res = await API.put('/users/profile', payload);
       toast.success("Academic Profile configured successfully!");
-      if (setUser) setUser(res.data);
-      localStorage.setItem('user', JSON.stringify(res.data));
+      const updatedUser = { ...res.data, token: user?.token || localStorage.getItem('token') };
+      if (setUser) setUser(updatedUser);
+      localStorage.setItem('user', JSON.stringify(updatedUser));
       setShowQuickProfileModal(false);
       fetchData();
     } catch (error) {
@@ -480,7 +483,7 @@ const Dashboard = () => {
 
     setIsApplying(true);
     try {
-      let finalResumeUrl = user.academicDetails?.resumeUrl;
+      let finalResumeUrl = studentProfile.resumeUrl || user.academicDetails?.resumeUrl;
       
       if (resumeFile) {
         const formData = new FormData();
@@ -490,9 +493,18 @@ const Dashboard = () => {
 
         // Auto update student profile resume URL
         try {
-          const profileRes = await API.put('/users/profile', { resumeUrl: finalResumeUrl });
-          if (setUser) setUser(profileRes.data);
-          localStorage.setItem('user', JSON.stringify(profileRes.data));
+          const profileRes = await API.put('/users/profile', {
+            department: studentProfile.department || user.academicDetails?.department,
+            graduationYear: Number(studentProfile.graduationYear || user.academicDetails?.graduationYear || 2026),
+            cgpa: studentProfile.cgpa !== '' ? Number(studentProfile.cgpa) : user.academicDetails?.cgpa,
+            activeBacklogs: Number(studentProfile.activeBacklogs || 0),
+            skills: studentProfile.skills,
+            certifications: studentProfile.certifications,
+            resumeUrl: finalResumeUrl 
+          });
+          const updatedUser = { ...profileRes.data, token: user?.token || localStorage.getItem('token') };
+          if (setUser) setUser(updatedUser);
+          localStorage.setItem('user', JSON.stringify(updatedUser));
         } catch(e) {
           console.warn("Could not auto-update profile resume URL", e);
         }

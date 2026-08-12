@@ -15,7 +15,19 @@ export const AuthProvider = ({ children }) => {
     const token = localStorage.getItem('token');
     
     if (storedUser && token) {
-      setUser(JSON.parse(storedUser));
+      const parsedUser = JSON.parse(storedUser);
+      setUser(parsedUser);
+
+      // Fetch latest profile from DB to ensure sync
+      API.get('/users/me')
+        .then(res => {
+          const freshUser = { ...res.data, token };
+          setUser(freshUser);
+          localStorage.setItem('user', JSON.stringify(freshUser));
+        })
+        .catch(err => {
+          console.error("Failed to fetch fresh user profile from server:", err);
+        });
     }
     setLoading(false);
   }, []);
@@ -29,15 +41,12 @@ export const AuthProvider = ({ children }) => {
       setUser(res.data);
       navigate('/dashboard'); 
     } catch (error) {
-      // Login still uses alert for now
       alert(error.response?.data?.message || 'Login failed');
     }
   };
 
-  // NEW: Register function
-  // NEW: Added adminCode as a parameter
+  // Register function
   const register = async (name, email, password, role, adminCode) => {
-    // Pass it along in the API request
     const res = await API.post('/users/register', { name, email, password, role, adminCode });
     
     localStorage.setItem('token', res.data.token);
@@ -55,9 +64,8 @@ export const AuthProvider = ({ children }) => {
   };
 
   return (
-    // NEW: Added 'register' to this list so your pages can actually use it!
-    <AuthContext.Provider value={{ user, login, register, logout, loading }}>
+    <AuthContext.Provider value={{ user, setUser, login, register, logout, loading }}>
       {children}
     </AuthContext.Provider>
   );
-};
+};
