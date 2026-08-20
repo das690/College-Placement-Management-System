@@ -20,7 +20,11 @@ router.post('/register', async (req, res) => {
     const { name, email, password, role, adminCode } = req.body;
 
     if (!name || !email || !password) {
-      return res.status(400).json({ message: 'Please add all required fields' });
+      return res.status(400).json({ message: 'Please provide your full name, email address, and password.' });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters long.' });
     }
 
     if (role === 'admin') {
@@ -33,7 +37,7 @@ router.post('/register', async (req, res) => {
     // Check if user exists
     const userExists = await User.findOne({ email });
     if (userExists) {
-      return res.status(400).json({ message: 'User already exists' });
+      return res.status(400).json({ message: 'An account with this email address already exists. Please login instead.' });
     }
 
     // Hash password
@@ -70,7 +74,8 @@ router.post('/register', async (req, res) => {
       res.status(400).json({ message: 'Invalid user data' });
     }
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('POST /api/users/register error:', error.message);
+    res.status(500).json({ message: 'Registration failed due to a server error. Please try again later.' });
   }
 });
 
@@ -94,10 +99,11 @@ router.post('/login', async (req, res) => {
         token: generateToken(user._id),
       });
     } else {
-      res.status(401).json({ message: 'Invalid credentials' });
+      res.status(401).json({ message: 'Invalid email or password. Please check your credentials and try again.' });
     }
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('POST /api/users/login error:', error.message);
+    res.status(500).json({ message: 'Login failed due to a server error. Please try again later.' });
   }
 });
 
@@ -109,7 +115,8 @@ router.get('/me', protect, async (req, res) => {
     const user = await User.findById(req.user.id).select('-password');
     res.status(200).json(user);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('GET /api/users/me error:', error.message);
+    res.status(500).json({ message: 'Failed to fetch your profile. Please try again.' });
   }
 });
 
@@ -165,7 +172,8 @@ router.put('/profile', protect, async (req, res) => {
       token: generateToken(updatedUser._id),
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('PUT /api/users/profile error:', error.message);
+    res.status(500).json({ message: 'Failed to update your academic profile. Please try again.' });
   }
 });
 

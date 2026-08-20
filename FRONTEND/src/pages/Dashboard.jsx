@@ -1185,7 +1185,7 @@ const Dashboard = () => {
                         {!studentProfile.resumeUrl && <span className="text-xs text-red-400 font-bold">✕ Missing</span>}
                       </label>
                       {studentProfile.resumeUrl && (
-                        <a href={studentProfile.resumeUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:text-blue-300 underline font-semibold flex items-center gap-1">
+                        <a href={getResumeUrl(studentProfile.resumeUrl)} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:text-blue-300 underline font-semibold flex items-center gap-1">
                           📄 View Current Resume
                         </a>
                       )}

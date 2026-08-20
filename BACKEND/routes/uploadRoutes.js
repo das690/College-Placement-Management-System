@@ -55,16 +55,16 @@ router.post('/', protect, (req, res) => {
       return res.status(400).json({ message: 'No resume file provided. Please choose a valid PDF document.' });
     }
     
-    // Build canonical public URL
+    // Store relative path — the frontend's getResumeUrl() resolves it to a full URL
+    const relativeUrl = `/uploads/${req.file.filename}`;
     const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
     const host = req.headers['x-forwarded-host'] || req.get('host') || 'localhost:5000';
-    const resumeUrl = `${protocol}://${host}/uploads/${req.file.filename}`;
     const viewUrl = `${protocol}://${host}/api/upload/view/${req.file.filename}`;
     
     return res.status(200).json({
       message: 'Resume uploaded successfully!',
-      resumeUrl,
-      relativeUrl: `/uploads/${req.file.filename}`,
+      resumeUrl: relativeUrl,
+      relativeUrl,
       viewUrl,
       filename: req.file.filename,
       originalName: req.file.originalname,

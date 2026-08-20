@@ -35,7 +35,8 @@ router.get('/', protect, async (req, res) => {
 
     res.status(200).json(applications);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('GET /api/applications error:', error.message);
+    res.status(500).json({ message: 'Unable to fetch applications. Please try again later.' });
   }
 });
 
@@ -112,7 +113,8 @@ router.post('/', protect, async (req, res) => {
 
     res.status(201).json(populatedApp);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('POST /api/applications error:', error.message);
+    res.status(500).json({ message: 'Failed to submit your application. Please try again later.' });
   }
 });
 
@@ -147,7 +149,8 @@ router.put('/:id/status', protect, async (req, res) => {
 
     res.status(200).json(populatedApp);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('PUT /api/applications/:id/status error:', error.message);
+    res.status(500).json({ message: 'Failed to update application status. Please try again.' });
   }
 });
 
@@ -186,7 +189,8 @@ router.delete('/:id', protect, async (req, res) => {
       application: populatedApp
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('DELETE /api/applications/:id error:', error.message);
+    res.status(500).json({ message: 'Failed to process application withdrawal. Please try again.' });
   }
 });
 

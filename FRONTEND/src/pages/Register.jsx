@@ -1,12 +1,12 @@
 import { useState, useContext } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
-import { validateEmail, validatePassword } from '../utils/validation';
+import { validateEmail, validatePassword, validateConfirmPassword } from '../utils/validation';
 
 const Register = () => {
   const { register } = useContext(AuthContext);
   const navigate = useNavigate();
-  const [formData, setFormData] = useState({ name: '', email: '', password: '', role: 'student', adminCode: '' });
+  const [formData, setFormData] = useState({ name: '', email: '', password: '', confirmPassword: '', role: 'student', adminCode: '' });
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
   const [serverError, setServerError] = useState('');
@@ -39,6 +39,9 @@ const Register = () => {
     if (formData.role === 'admin' && (!formData.adminCode || formData.adminCode.trim() === '')) {
       validationErrors.adminCode = 'Admin Secret Passcode is required.';
     }
+
+    const confirmErr = validateConfirmPassword(formData.password, formData.confirmPassword);
+    if (confirmErr) validationErrors.confirmPassword = confirmErr;
 
     if (Object.keys(validationErrors).length > 0) {
       setErrors(validationErrors);
@@ -129,6 +132,22 @@ const Register = () => {
             {errors.password && (
               <p className="text-xs text-red-300 mt-1 font-semibold flex items-center gap-1">
                 <span>✕</span> {errors.password}
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-200 mb-1">Confirm Password</label>
+            <input 
+              type="password" 
+              className={`w-full px-4 py-3 bg-white/20 border ${errors.confirmPassword ? 'border-red-400 focus:ring-red-400' : 'border-white/10 focus:ring-blue-400'} rounded-xl text-white placeholder-gray-300 focus:outline-none focus:ring-2 focus:bg-white/30 transition-all`}
+              placeholder="••••••••"
+              value={formData.confirmPassword}
+              onChange={(e) => handleChange('confirmPassword', e.target.value)}
+            />
+            {errors.confirmPassword && (
+              <p className="text-xs text-red-300 mt-1 font-semibold flex items-center gap-1">
+                <span>✕</span> {errors.confirmPassword}
               </p>
             )}
           </div>

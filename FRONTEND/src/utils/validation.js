@@ -17,6 +17,12 @@ export const validatePassword = (password, minLength = 6) => {
   return null;
 };
 
+export const validateConfirmPassword = (password, confirmPassword) => {
+  if (!confirmPassword) return 'Please confirm your password.';
+  if (password !== confirmPassword) return 'Passwords do not match.';
+  return null;
+};
+
 export const validateDrive = (drive) => {
   const errors = {};
   const todayStr = new Date().toISOString().split('T')[0];

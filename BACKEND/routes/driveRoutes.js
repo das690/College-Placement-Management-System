@@ -11,7 +11,8 @@ router.get('/', async (req, res) => {
     const drives = await Drive.find().sort({ createdAt: -1 });
     res.status(200).json(drives);
   } catch (error) {
-    res.status(500).json({ message: 'Failed to fetch drives: ' + error.message });
+    console.error('GET /api/drives error:', error.message);
+    res.status(500).json({ message: 'Unable to fetch placement drives. Please try again later.' });
   }
 });
 
@@ -51,7 +52,8 @@ router.post('/', protect, async (req, res) => {
 
     res.status(201).json(drive);
   } catch (error) {
-    res.status(500).json({ message: 'Failed to create drive: ' + error.message });
+    console.error('POST /api/drives error:', error.message);
+    res.status(500).json({ message: 'Failed to create placement drive. Please try again later.' });
   }
 });
 
@@ -93,7 +95,8 @@ router.put('/:id', protect, async (req, res) => {
     await drive.save();
     res.status(200).json(drive);
   } catch (error) {
-    res.status(500).json({ message: 'Failed to update drive: ' + error.message });
+    console.error('PUT /api/drives/:id error:', error.message);
+    res.status(500).json({ message: 'Failed to update placement drive. Please try again later.' });
   }
 });
 
@@ -112,7 +115,8 @@ router.delete('/:id', protect, async (req, res) => {
     await drive.deleteOne();
     res.status(200).json({ message: 'Placement Drive removed successfully.' });
   } catch (error) {
-    res.status(500).json({ message: 'Failed to delete drive: ' + error.message });
+    console.error('DELETE /api/drives/:id error:', error.message);
+    res.status(500).json({ message: 'Failed to delete placement drive. Please try again later.' });
   }
 });
 

@@ -45,7 +45,8 @@ router.get('/', protect, async (req, res) => {
       .sort({ createdAt: -1 });
     res.status(200).json(jobs);
   } catch (error) {
-    res.status(500).json({ message: 'Failed to fetch job positions: ' + error.message });
+    console.error('GET /api/jobs error:', error.message);
+    res.status(500).json({ message: 'Unable to fetch job positions. Please try again later.' });
   }
 });
 
@@ -101,7 +102,8 @@ router.post('/', protect, async (req, res) => {
 
     res.status(201).json(populatedJob);
   } catch (error) {
-    res.status(500).json({ message: 'Failed to post position: ' + error.message });
+    console.error('POST /api/jobs error:', error.message);
+    res.status(500).json({ message: 'Failed to post the position. Please try again later.' });
   }
 });
 
@@ -150,7 +152,8 @@ router.put('/:id', protect, async (req, res) => {
 
     res.status(200).json(updatedJob);
   } catch (error) {
-    res.status(500).json({ message: 'Failed to update job position: ' + error.message });
+    console.error('PUT /api/jobs/:id error:', error.message);
+    res.status(500).json({ message: 'Failed to update the position. Please try again later.' });
   }
 });
 
@@ -172,7 +175,8 @@ router.delete('/:id', protect, async (req, res) => {
     await job.deleteOne();
     res.status(200).json({ message: 'Job position successfully removed from the drive.' });
   } catch (error) {
-    res.status(500).json({ message: 'Failed to delete position: ' + error.message });
+    console.error('DELETE /api/jobs/:id error:', error.message);
+    res.status(500).json({ message: 'Failed to delete the position. Please try again later.' });
   }
 });
 
