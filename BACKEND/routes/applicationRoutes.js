@@ -125,23 +125,35 @@ router.put('/:id/status', protect, async (req, res) => {
     if (!application) return res.status(404).json({ message: 'Application not found' });
     
     // Update core status
-    application.status = req.body.status;
+    if (req.body.status) application.status = req.body.status;
     
-    // Update interview details if provided
-    if (req.body.interviewDate) application.interviewDate = req.body.interviewDate;
+    // Update interview details if provided (validate past date)
+    if (req.body.interviewDate) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      if (req.body.interviewDate < todayStr) {
+        return res.status(400).json({ message: 'Interview date cannot be scheduled in the past.' });
+      }
+      application.interviewDate = req.body.interviewDate;
+    }
     if (req.body.interviewTime) application.interviewTime = req.body.interviewTime;
     if (req.body.interviewLink) application.interviewLink = req.body.interviewLink;
 
     await application.save();
-    res.status(200).json(application);
+    
+    const populatedApp = await Application.findById(application._id)
+      .populate('drive', 'name status academicYear')
+      .populate({ path: 'job', populate: { path: 'company', select: 'name' }})
+      .populate('student', 'name email academicDetails');
+
+    res.status(200).json(populatedApp);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
 
-// @desc    Delete/Terminate/Withdraw an application
+// @desc    Soft-terminate / Withdraw an application (Preserve analytics data)
 // @route   DELETE /api/applications/:id
-// @access  Private (Admins or the Owning Student)
+// @access  Private (Admins, Companies, or Owning Student)
 router.delete('/:id', protect, async (req, res) => {
   try {
     const application = await Application.findById(req.params.id);
@@ -150,13 +162,29 @@ router.delete('/:id', protect, async (req, res) => {
       return res.status(404).json({ message: 'Application not found' });
     }
 
-    // SECURITY CHECK: Is it an Admin, OR is it the student who owns this application?
-    if (req.user.role !== 'admin' && application.student.toString() !== req.user.id) {
-      return res.status(403).json({ message: 'Not authorized to delete this application' });
+    // SECURITY CHECK: Is it an Admin, Company, OR the student who owns this application?
+    if (req.user.role !== 'admin' && req.user.role !== 'company' && application.student.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Not authorized to modify this application' });
     }
     
-    await application.deleteOne();
-    res.status(200).json({ message: 'Application successfully removed' });
+    // Soft-terminate status to preserve application submission records for drive analytics
+    if (req.user.role === 'student' && application.student.toString() === req.user.id) {
+      application.status = 'Withdrawn';
+    } else {
+      application.status = 'Terminated';
+    }
+
+    await application.save();
+
+    const populatedApp = await Application.findById(application._id)
+      .populate('drive', 'name status academicYear')
+      .populate({ path: 'job', populate: { path: 'company', select: 'name' }})
+      .populate('student', 'name email academicDetails');
+
+    res.status(200).json({ 
+      message: `Application marked as ${application.status}. Record preserved in drive reports & analytics.`,
+      application: populatedApp
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

@@ -25,6 +25,18 @@ router.post('/', protect, async (req, res) => {
     }
 
     const { name, description, academicYear, startDate, endDate, status } = req.body;
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    if (startDate && startDate < todayStr) {
+      return res.status(400).json({ message: 'Drive Start Date cannot be set in the past.' });
+    }
+    if (endDate && startDate && endDate < startDate) {
+      return res.status(400).json({ message: 'Drive End Date cannot be earlier than Start Date.' });
+    }
+    if (endDate && endDate < todayStr) {
+      return res.status(400).json({ message: 'Drive End Date cannot be set in the past.' });
+    }
+
     const drive = await Drive.create({
       name,
       description,
@@ -52,6 +64,17 @@ router.put('/:id', protect, async (req, res) => {
 
     const drive = await Drive.findById(req.params.id);
     if (!drive) return res.status(404).json({ message: 'Drive not found' });
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const newStartDate = req.body.startDate || drive.startDate;
+    const newEndDate = req.body.endDate || drive.endDate;
+
+    if (req.body.startDate && req.body.startDate < todayStr) {
+      return res.status(400).json({ message: 'Drive Start Date cannot be set in the past.' });
+    }
+    if (newEndDate && newStartDate && newEndDate < newStartDate) {
+      return res.status(400).json({ message: 'Drive End Date cannot be earlier than Start Date.' });
+    }
 
     if (req.body.name) drive.name = req.body.name;
     if (req.body.description !== undefined) drive.description = req.body.description;

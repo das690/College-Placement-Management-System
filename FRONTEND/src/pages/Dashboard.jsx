@@ -12,8 +12,46 @@ const RECRUITMENT_STAGES = [
   'Technical Interview',
   'HR Interview',
   'Selected',
-  'Rejected'
+  'Rejected',
+  'Terminated',
+  'Withdrawn'
 ];
+
+const exportDriveReportCSV = (drives, jobs, apps, selectedDriveId) => {
+  const targetDrive = selectedDriveId === 'ALL' ? null : drives.find(d => d._id === selectedDriveId);
+  const driveName = targetDrive ? targetDrive.name : 'All_Placement_Drives';
+  
+  let filteredApps = apps;
+  if (selectedDriveId !== 'ALL') {
+    filteredApps = apps.filter(app => {
+      const driveId = typeof app.drive === 'object' ? app.drive?._id : (app.drive || app.job?.drive?._id || app.job?.drive);
+      return driveId === selectedDriveId;
+    });
+  }
+
+  const headers = ['Drive Name', 'Position Title', 'Company', 'Student Name', 'Department', 'CGPA', 'Recruitment Status', 'Interview Date', 'Interview Link'];
+  const rows = filteredApps.map(app => [
+    `"${(app.drive?.name || app.job?.drive?.name || 'Campus Drive').replace(/"/g, '""')}"`,
+    `"${(app.job?.title || 'N/A').replace(/"/g, '""')}"`,
+    `"${(app.job?.company?.name || 'N/A').replace(/"/g, '""')}"`,
+    `"${(app.student?.name || 'Candidate').replace(/"/g, '""')}"`,
+    `"${(app.student?.academicDetails?.department || 'N/A').replace(/"/g, '""')}"`,
+    app.student?.academicDetails?.cgpa || 'N/A',
+    `"${app.status || 'Applied'}"`,
+    `"${app.interviewDate || 'N/A'}"`,
+    `"${app.interviewLink || 'N/A'}"`
+  ]);
+
+  const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+  const encodedUri = encodeURI(csvContent);
+  const link = document.createElement('a');
+  link.setAttribute('href', encodedUri);
+  link.setAttribute('download', `${driveName.replace(/\s+/g, '_')}_Placement_Report.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  toast.success(`Downloaded CSV Placement Report for ${targetDrive ? targetDrive.name : 'All Drives'}`);
+};
 
 const DEPARTMENTS = [
   'Computer Science',
@@ -59,6 +97,8 @@ const Dashboard = () => {
     name: '', 
     description: '', 
     academicYear: '2025-2026',
+    startDate: '',
+    endDate: '',
     status: 'Active' 
   });
 
@@ -270,11 +310,21 @@ const Dashboard = () => {
   // ================= ADMIN & COMPANY HANDLERS =================
   const handleCreateDrive = async (e) => {
     e.preventDefault();
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (newDrive.startDate && newDrive.startDate < todayStr) {
+      return toast.error("Drive Start Date cannot be set in the past");
+    }
+    if (newDrive.endDate && newDrive.startDate && newDrive.endDate < newDrive.startDate) {
+      return toast.error("Drive End Date cannot be earlier than Start Date");
+    }
+    if (newDrive.endDate && newDrive.endDate < todayStr) {
+      return toast.error("Drive End Date cannot be set in the past");
+    }
     try {
       const res = await API.post('/drives', newDrive);
       toast.success('Placement Drive Created Successfully!');
       setDrives([res.data, ...drives]);
-      setNewDrive({ name: '', description: '', academicYear: '2025-2026', status: 'Active' });
+      setNewDrive({ name: '', description: '', academicYear: '2025-2026', startDate: '', endDate: '', status: 'Active' });
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to create drive');
     }
@@ -304,6 +354,15 @@ const Dashboard = () => {
   const handleCreateJob = async (e) => {
     e.preventDefault();
     if (!newJob.drive) return toast.error("You must select a Placement Drive");
+    if (Number(newJob.minCgpa) < 0 || Number(newJob.minCgpa) > 10) {
+      return toast.error("Minimum CGPA required must be between 0 and 10");
+    }
+    if (Number(newJob.maxBacklogs) < 0) {
+      return toast.error("Maximum allowed backlogs cannot be negative");
+    }
+    if (Number(newJob.targetGraduationYear) < 2000) {
+      return toast.error("Please enter a valid Target Graduation Year");
+    }
 
     const formattedJob = {
       ...newJob,
@@ -350,8 +409,8 @@ const Dashboard = () => {
       return; 
     }
     try {
-      await API.put(`/applications/${appId}/status`, { status: newStatus });
-      setApplications(applications.map(app => app._id === appId ? { ...app, status: newStatus } : app));
+      const res = await API.put(`/applications/${appId}/status`, { status: newStatus });
+      setApplications(applications.map(app => app._id === appId ? (res.data || { ...app, status: newStatus }) : app));
       toast.success(`Application updated to stage: ${newStatus}`);
     } catch (error) {
       toast.error('Failed to update stage');
@@ -360,34 +419,33 @@ const Dashboard = () => {
 
   const handleScheduleInterview = async (e) => {
     e.preventDefault();
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (interviewDetails.date < todayStr) {
+      return toast.error("Interview Date cannot be scheduled in the past");
+    }
     try {
-      await API.put(`/applications/${selectedAppForInterview}/status`, { 
+      const res = await API.put(`/applications/${selectedAppForInterview}/status`, { 
         status: interviewDetails.stage,
         interviewDate: interviewDetails.date,
         interviewTime: interviewDetails.time,
         interviewLink: interviewDetails.link
       });
-      setApplications(applications.map(app => app._id === selectedAppForInterview ? { 
-        ...app, 
-        status: interviewDetails.stage,
-        interviewDate: interviewDetails.date,
-        interviewTime: interviewDetails.time,
-        interviewLink: interviewDetails.link 
-      } : app));
+      setApplications(applications.map(app => app._id === selectedAppForInterview ? res.data : app));
       toast.success(`Interview scheduled for candidate! Stage: ${interviewDetails.stage}`);
       setShowInterviewModal(false);
       setSelectedAppForInterview(null);
     } catch (error) {
-      toast.error('Failed to schedule interview');
+      toast.error(error.response?.data?.message || 'Failed to schedule interview');
     }
   };
 
   const handleDeleteApplication = async (appId) => {
-    if (!window.confirm("Terminate this application record?")) return;
+    if (!window.confirm("Terminate this application record? The status will update to Terminated and be retained in placement drive analytics.")) return;
     try {
-      await API.delete(`/applications/${appId}`);
-      setApplications(applications.filter(app => app._id !== appId));
-      toast.success("Application terminated");
+      const res = await API.delete(`/applications/${appId}`);
+      const updatedApp = res.data?.application;
+      setApplications(applications.map(app => app._id === appId ? (updatedApp || { ...app, status: 'Terminated' }) : app));
+      toast.success("Application marked as Terminated. Historical submission preserved in drive analytics!");
     } catch (error) {
       toast.error("Failed to terminate application");
     }
@@ -396,6 +454,12 @@ const Dashboard = () => {
   // ================= STUDENT HANDLERS =================
   const handleSaveProfile = async (e) => {
     e.preventDefault();
+    if (studentProfile.cgpa !== '' && studentProfile.cgpa !== undefined && (Number(studentProfile.cgpa) < 0 || Number(studentProfile.cgpa) > 10)) {
+      return toast.error("CGPA must be between 0 and 10");
+    }
+    if (Number(studentProfile.activeBacklogs) < 0) {
+      return toast.error("Active backlogs cannot be negative");
+    }
     try {
       const payload = {
         department: studentProfile.department,
@@ -419,6 +483,12 @@ const Dashboard = () => {
 
   const handleSaveQuickProfile = async (e) => {
     e.preventDefault();
+    if (quickProfileData.cgpa !== '' && quickProfileData.cgpa !== undefined && (Number(quickProfileData.cgpa) < 0 || Number(quickProfileData.cgpa) > 10)) {
+      return toast.error("CGPA must be between 0 and 10");
+    }
+    if (Number(quickProfileData.activeBacklogs) < 0) {
+      return toast.error("Active backlogs cannot be negative");
+    }
     try {
       setIsQuickSaving(true);
       let uploadedResumeUrl = quickProfileData.resumeUrl || studentProfile.resumeUrl || user.academicDetails?.resumeUrl || '';
@@ -460,11 +530,12 @@ const Dashboard = () => {
   };
 
   const handleWithdrawApplication = async (appId) => {
-    if (!window.confirm("Withdraw your application from this drive position?")) return;
+    if (!window.confirm("Withdraw your application from this drive position? The status will update to Withdrawn and be retained in your history.")) return;
     try {
-      await API.delete(`/applications/${appId}`);
-      setApplications(applications.filter(app => app._id !== appId));
-      toast.success("Application withdrawn successfully");
+      const res = await API.delete(`/applications/${appId}`);
+      const updatedApp = res.data?.application;
+      setApplications(applications.map(app => app._id === appId ? (updatedApp || { ...app, status: 'Withdrawn' }) : app));
+      toast.success("Application marked as Withdrawn. Historical record preserved!");
     } catch (error) {
       toast.error("Failed to withdraw application");
     }
@@ -544,6 +615,8 @@ const Dashboard = () => {
       case 'Selected': 
       case 'Hired': return 'bg-green-900/50 text-green-300 border-green-800';
       case 'Rejected': return 'bg-red-900/50 text-red-300 border-red-800';
+      case 'Terminated': return 'bg-rose-950/80 text-rose-300 border-rose-800';
+      case 'Withdrawn': return 'bg-gray-800 text-gray-400 border-gray-700';
       default: return 'bg-gray-800 text-gray-300 border-gray-700';
     }
   };
@@ -564,9 +637,11 @@ const Dashboard = () => {
 
   // Analytics Computation
   const selectedCount = filteredAppsByDrive.filter(app => app.status === 'Selected' || app.status === 'Hired').length;
-  const placementPercentage = filteredAppsByDrive.length > 0 
-    ? Math.round((selectedCount / filteredAppsByDrive.length) * 100) 
-    : 0;
+  const terminatedCount = filteredAppsByDrive.filter(app => app.status === 'Terminated' || app.status === 'Withdrawn').length;
+  const activeCount = filteredAppsByDrive.filter(app => app.status !== 'Terminated' && app.status !== 'Withdrawn').length;
+  const placementPercentage = activeCount > 0 
+    ? Math.round((selectedCount / activeCount) * 100) 
+    : (filteredAppsByDrive.length > 0 ? Math.round((selectedCount / filteredAppsByDrive.length) * 100) : 0);
 
   // Department-wise Stats
   const deptStats = useMemo(() => {
@@ -1260,7 +1335,7 @@ const Dashboard = () => {
             <div className="space-y-6 animate-fade-in">
               <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
                 <h3 className="text-xl font-bold text-white mb-4">Initialize Placement Drive</h3>
-                <form onSubmit={handleCreateDrive} className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <form onSubmit={handleCreateDrive} className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <input 
                     type="text" 
                     required 
@@ -1283,9 +1358,31 @@ const Dashboard = () => {
                     onChange={(e) => setNewDrive({...newDrive, description: e.target.value})} 
                     className="px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500" 
                   />
-                  <button type="submit" className="bg-blue-600 hover:bg-blue-500 text-white font-bold px-6 py-2.5 rounded-xl transition-colors shadow-md">
-                    Create Placement Drive
-                  </button>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-400 mb-1">Start Date</label>
+                    <input 
+                      type="date" 
+                      min={new Date().toISOString().split('T')[0]}
+                      value={newDrive.startDate} 
+                      onChange={(e) => setNewDrive({...newDrive, startDate: e.target.value})} 
+                      className="w-full px-4 py-2 bg-gray-900/60 border border-gray-600 rounded-xl text-white text-xs outline-none focus:border-blue-500" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-400 mb-1">End Date</label>
+                    <input 
+                      type="date" 
+                      min={newDrive.startDate || new Date().toISOString().split('T')[0]}
+                      value={newDrive.endDate} 
+                      onChange={(e) => setNewDrive({...newDrive, endDate: e.target.value})} 
+                      className="w-full px-4 py-2 bg-gray-900/60 border border-gray-600 rounded-xl text-white text-xs outline-none focus:border-blue-500" 
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold px-6 py-2.5 rounded-xl transition-colors shadow-md">
+                      Create Placement Drive
+                    </button>
+                  </div>
                 </form>
               </div>
 
@@ -1437,24 +1534,42 @@ const Dashboard = () => {
           {/* PLACEMENT ANALYTICS & DRIVE REPORTING */}
           {currentView === 'analytics' && (
             <div className="space-y-8 animate-fade-in">
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-2xl font-bold text-white">Placement Drive Reports & Analytics</h2>
+                  <p className="text-gray-400 text-sm">Real-time candidate metrics, department breakdown, and hiring statistics</p>
+                </div>
+                <button 
+                  onClick={() => exportDriveReportCSV(drives, jobs, applications, selectedDriveFilter)}
+                  className="px-5 py-2.5 bg-green-600 hover:bg-green-500 text-white font-bold rounded-xl shadow-lg transition-colors flex items-center gap-2 text-sm shrink-0"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                  Export Drive Report (CSV)
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
                   <p className="text-gray-400 text-xs uppercase font-bold">Target Drive</p>
-                  <h3 className="text-lg font-bold text-blue-400 mt-1 truncate">
+                  <h3 className="text-base font-bold text-blue-400 mt-1 truncate">
                     {selectedDriveFilter === 'ALL' ? 'All Placement Drives' : (drives.find(d => d._id === selectedDriveFilter)?.name || 'Drive')}
                   </h3>
                 </div>
-                <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg">
+                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
                   <p className="text-gray-400 text-xs uppercase font-bold">Total Applications</p>
-                  <h3 className="text-3xl font-bold text-white mt-1">{filteredAppsByDrive.length}</h3>
+                  <h3 className="text-2xl font-bold text-white mt-1">{filteredAppsByDrive.length}</h3>
                 </div>
-                <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg">
-                  <p className="text-gray-400 text-xs uppercase font-bold">Placed Students</p>
-                  <h3 className="text-3xl font-bold text-green-400 mt-1">{selectedCount}</h3>
+                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
+                  <p className="text-gray-400 text-xs uppercase font-bold">Placed / Hired</p>
+                  <h3 className="text-2xl font-bold text-green-400 mt-1">{selectedCount}</h3>
                 </div>
-                <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg">
+                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
+                  <p className="text-gray-400 text-xs uppercase font-bold">Terminated / Withdrawn</p>
+                  <h3 className="text-2xl font-bold text-rose-400 mt-1">{terminatedCount}</h3>
+                </div>
+                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
                   <p className="text-gray-400 text-xs uppercase font-bold">Placement Rate</p>
-                  <h3 className="text-3xl font-bold text-cyan-400 mt-1">{placementPercentage}%</h3>
+                  <h3 className="text-2xl font-bold text-cyan-400 mt-1">{placementPercentage}%</h3>
                 </div>
               </div>
 
@@ -1690,6 +1805,104 @@ const Dashboard = () => {
               </div>
             </div>
           )}
+
+          {/* COMPANY DRIVE REPORTS & ANALYTICS */}
+          {currentView === 'analytics' && (
+            <div className="space-y-8 animate-fade-in">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-2xl font-bold text-white">Drive Reports & Candidate Analytics</h2>
+                  <p className="text-gray-400 text-sm">Hiring progress and candidate statistics across placement drives</p>
+                </div>
+                <button 
+                  onClick={() => exportDriveReportCSV(drives, jobs, applications, selectedDriveFilter)}
+                  className="px-5 py-2.5 bg-green-600 hover:bg-green-500 text-white font-bold rounded-xl shadow-lg transition-colors flex items-center gap-2 text-sm shrink-0"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                  Export Drive Report (CSV)
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
+                  <p className="text-gray-400 text-xs uppercase font-bold">Target Drive</p>
+                  <h3 className="text-base font-bold text-blue-400 mt-1 truncate">
+                    {selectedDriveFilter === 'ALL' ? 'All Placement Drives' : (drives.find(d => d._id === selectedDriveFilter)?.name || 'Drive')}
+                  </h3>
+                </div>
+                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
+                  <p className="text-gray-400 text-xs uppercase font-bold">Candidates Applied</p>
+                  <h3 className="text-2xl font-bold text-white mt-1">{filteredAppsByDrive.length}</h3>
+                </div>
+                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
+                  <p className="text-gray-400 text-xs uppercase font-bold">Selected / Hired</p>
+                  <h3 className="text-2xl font-bold text-green-400 mt-1">{selectedCount}</h3>
+                </div>
+                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
+                  <p className="text-gray-400 text-xs uppercase font-bold">Terminated / Withdrawn</p>
+                  <h3 className="text-2xl font-bold text-rose-400 mt-1">{terminatedCount}</h3>
+                </div>
+              </div>
+
+              {/* Department Statistics Table for Company */}
+              <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
+                <h3 className="text-xl font-bold text-white mb-4">Department-wise Candidate Performance</h3>
+                <div className="overflow-x-auto rounded-xl border border-gray-700">
+                  <table className="w-full text-left text-sm text-gray-300">
+                    <thead className="bg-gray-900/70 text-gray-200 border-b border-gray-700">
+                      <tr>
+                        <th className="px-6 py-4">Department</th>
+                        <th className="px-6 py-4">Applications Received</th>
+                        <th className="px-6 py-4">Selections / Hires</th>
+                        <th className="px-6 py-4">Department Conversion %</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-700 bg-gray-800/40">
+                      {deptStats.map(d => {
+                        const pct = d.applications > 0 ? Math.round((d.selected / d.applications) * 100) : 0;
+                        return (
+                          <tr key={d.department} className="hover:bg-gray-700/40">
+                            <td className="px-6 py-4 font-bold text-white">{d.department}</td>
+                            <td className="px-6 py-4 text-blue-400 font-semibold">{d.applications}</td>
+                            <td className="px-6 py-4 text-green-400 font-semibold">{d.selected}</td>
+                            <td className="px-6 py-4 font-bold text-cyan-400">{pct}%</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Recruitment Stage Breakdown Table */}
+              <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
+                <h3 className="text-xl font-bold text-white mb-4">Candidate Stage Breakdown</h3>
+                <div className="overflow-x-auto rounded-xl border border-gray-700">
+                  <table className="w-full text-left text-sm text-gray-300">
+                    <thead className="bg-gray-900/70 text-gray-200 border-b border-gray-700">
+                      <tr>
+                        <th className="px-6 py-4">Stage Name</th>
+                        <th className="px-6 py-4">Candidate Count</th>
+                        <th className="px-6 py-4">Stage Percentage</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-700 bg-gray-800/40">
+                      {stageStats.map(st => {
+                        const pct = filteredAppsByDrive.length > 0 ? Math.round((st.count / filteredAppsByDrive.length) * 100) : 0;
+                        return (
+                          <tr key={st.name} className="hover:bg-gray-700/40">
+                            <td className="px-6 py-4 font-bold text-white">{st.name}</td>
+                            <td className="px-6 py-4 text-blue-400 font-semibold">{st.count}</td>
+                            <td className="px-6 py-4 font-bold text-cyan-400">{pct}%</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1740,7 +1953,14 @@ const Dashboard = () => {
             <form onSubmit={handleScheduleInterview} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-gray-300 mb-1">Interview Date</label>
-                <input type="date" required value={interviewDetails.date} onChange={(e) => setInterviewDetails({...interviewDetails, date: e.target.value})} className="w-full px-4 py-2 bg-gray-900/60 border border-gray-600 rounded-xl text-white text-sm outline-none" />
+                <input 
+                  type="date" 
+                  required 
+                  min={new Date().toISOString().split('T')[0]}
+                  value={interviewDetails.date} 
+                  onChange={(e) => setInterviewDetails({...interviewDetails, date: e.target.value})} 
+                  className="w-full px-4 py-2 bg-gray-900/60 border border-gray-600 rounded-xl text-white text-sm outline-none" 
+                />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-gray-300 mb-1">Interview Time</label>
