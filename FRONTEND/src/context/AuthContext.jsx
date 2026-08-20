@@ -1,6 +1,7 @@
 import { createContext, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../utils/api';
+import { toast } from 'react-hot-toast';
 
 export const AuthContext = createContext();
 
@@ -15,19 +16,23 @@ export const AuthProvider = ({ children }) => {
     const token = localStorage.getItem('token');
     
     if (storedUser && token) {
-      const parsedUser = JSON.parse(storedUser);
-      setUser(parsedUser);
+      try {
+        const parsedUser = JSON.parse(storedUser);
+        setUser(parsedUser);
 
-      // Fetch latest profile from DB to ensure sync
-      API.get('/users/me')
-        .then(res => {
-          const freshUser = { ...res.data, token };
-          setUser(freshUser);
-          localStorage.setItem('user', JSON.stringify(freshUser));
-        })
-        .catch(err => {
-          console.error("Failed to fetch fresh user profile from server:", err);
-        });
+        // Fetch latest profile from DB to ensure sync
+        API.get('/users/me')
+          .then(res => {
+            const freshUser = { ...res.data, token };
+            setUser(freshUser);
+            localStorage.setItem('user', JSON.stringify(freshUser));
+          })
+          .catch(err => {
+            console.error("Failed to fetch fresh user profile from server:", err);
+          });
+      } catch (e) {
+        console.error("Invalid stored user json:", e);
+      }
     }
     setLoading(false);
   }, []);
@@ -39,20 +44,31 @@ export const AuthProvider = ({ children }) => {
       localStorage.setItem('token', res.data.token);
       localStorage.setItem('user', JSON.stringify(res.data));
       setUser(res.data);
+      toast.success(`Welcome back, ${res.data.name}!`);
       navigate('/dashboard'); 
+      return res.data;
     } catch (error) {
-      alert(error.response?.data?.message || 'Login failed');
+      const msg = error.response?.data?.message || 'Login failed. Please check your credentials.';
+      toast.error(msg);
+      throw error;
     }
   };
 
   // Register function
   const register = async (name, email, password, role, adminCode) => {
-    const res = await API.post('/users/register', { name, email, password, role, adminCode });
-    
-    localStorage.setItem('token', res.data.token);
-    localStorage.setItem('user', JSON.stringify(res.data));
-    setUser(res.data);
-    navigate('/dashboard');
+    try {
+      const res = await API.post('/users/register', { name, email, password, role, adminCode });
+      localStorage.setItem('token', res.data.token);
+      localStorage.setItem('user', JSON.stringify(res.data));
+      setUser(res.data);
+      toast.success(`Account created successfully! Welcome, ${res.data.name}.`);
+      navigate('/dashboard');
+      return res.data;
+    } catch (error) {
+      const msg = error.response?.data?.message || 'Registration failed. Please try again.';
+      toast.error(msg);
+      throw error;
+    }
   };
 
   // Logout function
@@ -60,6 +76,7 @@ export const AuthProvider = ({ children }) => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     setUser(null);
+    toast.success('Logged out successfully.');
     navigate('/login');
   };
 

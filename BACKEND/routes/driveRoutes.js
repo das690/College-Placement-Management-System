@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Drive = require('../models/Drive');
-const { protect } = require('../middleware/authMiddleware'); // Assuming you have this middleware
+const { protect } = require('../middleware/authMiddleware');
 
 // @desc    Get placement drives (All for logged in users)
 // @route   GET /api/drives
@@ -11,7 +11,7 @@ router.get('/', async (req, res) => {
     const drives = await Drive.find().sort({ createdAt: -1 });
     res.status(200).json(drives);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: 'Failed to fetch drives: ' + error.message });
   }
 });
 
@@ -21,10 +21,15 @@ router.get('/', async (req, res) => {
 router.post('/', protect, async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Only admins can create placement drives' });
+      return res.status(403).json({ message: 'Only administrators can initialize placement drives.' });
     }
 
     const { name, description, academicYear, startDate, endDate, status } = req.body;
+
+    if (!name || name.trim().length < 3) {
+      return res.status(400).json({ message: 'Placement Drive Name is required (minimum 3 characters).' });
+    }
+
     const todayStr = new Date().toISOString().split('T')[0];
 
     if (startDate && startDate < todayStr) {
@@ -33,23 +38,20 @@ router.post('/', protect, async (req, res) => {
     if (endDate && startDate && endDate < startDate) {
       return res.status(400).json({ message: 'Drive End Date cannot be earlier than Start Date.' });
     }
-    if (endDate && endDate < todayStr) {
-      return res.status(400).json({ message: 'Drive End Date cannot be set in the past.' });
-    }
 
     const drive = await Drive.create({
-      name,
-      description,
+      name: name.trim(),
+      description: description || '',
       academicYear: academicYear || '2025-2026',
-      startDate,
-      endDate,
+      startDate: startDate || undefined,
+      endDate: endDate || undefined,
       status: status || 'Active',
       createdBy: req.user.id
     });
 
     res.status(201).json(drive);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: 'Failed to create drive: ' + error.message });
   }
 });
 
@@ -59,34 +61,39 @@ router.post('/', protect, async (req, res) => {
 router.put('/:id', protect, async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Only admins can update placement drives' });
+      return res.status(403).json({ message: 'Only administrators can update placement drives.' });
     }
 
     const drive = await Drive.findById(req.params.id);
-    if (!drive) return res.status(404).json({ message: 'Drive not found' });
+    if (!drive) return res.status(404).json({ message: 'Placement Drive not found.' });
 
-    const todayStr = new Date().toISOString().split('T')[0];
-    const newStartDate = req.body.startDate || drive.startDate;
-    const newEndDate = req.body.endDate || drive.endDate;
+    const { name, description, academicYear, startDate, endDate, status } = req.body;
 
-    if (req.body.startDate && req.body.startDate < todayStr) {
-      return res.status(400).json({ message: 'Drive Start Date cannot be set in the past.' });
+    if (name !== undefined) {
+      if (name.trim().length < 3) {
+        return res.status(400).json({ message: 'Drive Name must be at least 3 characters long.' });
+      }
+      drive.name = name.trim();
     }
-    if (newEndDate && newStartDate && newEndDate < newStartDate) {
+
+    if (description !== undefined) drive.description = description;
+    if (academicYear !== undefined) drive.academicYear = academicYear;
+    if (status !== undefined) drive.status = status;
+
+    const newStartDate = startDate !== undefined ? startDate : drive.startDate;
+    const newEndDate = endDate !== undefined ? endDate : drive.endDate;
+
+    if (startDate && endDate && endDate < startDate) {
       return res.status(400).json({ message: 'Drive End Date cannot be earlier than Start Date.' });
     }
 
-    if (req.body.name) drive.name = req.body.name;
-    if (req.body.description !== undefined) drive.description = req.body.description;
-    if (req.body.academicYear) drive.academicYear = req.body.academicYear;
-    if (req.body.status) drive.status = req.body.status;
-    if (req.body.startDate) drive.startDate = req.body.startDate;
-    if (req.body.endDate) drive.endDate = req.body.endDate;
+    if (startDate !== undefined) drive.startDate = startDate ? new Date(startDate) : null;
+    if (endDate !== undefined) drive.endDate = endDate ? new Date(endDate) : null;
 
     await drive.save();
     res.status(200).json(drive);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: 'Failed to update drive: ' + error.message });
   }
 });
 
@@ -96,16 +103,16 @@ router.put('/:id', protect, async (req, res) => {
 router.delete('/:id', protect, async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Only admins can delete placement drives' });
+      return res.status(403).json({ message: 'Only administrators can delete placement drives.' });
     }
 
     const drive = await Drive.findById(req.params.id);
-    if (!drive) return res.status(404).json({ message: 'Drive not found' });
+    if (!drive) return res.status(404).json({ message: 'Placement Drive not found.' });
 
     await drive.deleteOne();
-    res.status(200).json({ message: 'Placement Drive removed successfully' });
+    res.status(200).json({ message: 'Placement Drive removed successfully.' });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: 'Failed to delete drive: ' + error.message });
   }
 });
 

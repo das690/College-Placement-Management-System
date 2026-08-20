@@ -4,6 +4,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import API from '../utils/api';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { toast } from 'react-hot-toast';
+import { getResumeUrl, openResumeInNewTab, isPdfResume } from '../utils/resumeHelper';
+import { validateDrive, validateJob, validateStudentProfile, validateInterview } from '../utils/validation';
 
 const RECRUITMENT_STAGES = [
   'Applied',
@@ -29,7 +31,7 @@ const exportDriveReportCSV = (drives, jobs, apps, selectedDriveId) => {
     });
   }
 
-  const headers = ['Drive Name', 'Position Title', 'Company', 'Student Name', 'Department', 'CGPA', 'Recruitment Status', 'Interview Date', 'Interview Link'];
+  const headers = ['Drive Name', 'Position Title', 'Company', 'Student Name', 'Department', 'CGPA', 'Recruitment Status', 'Interview Date', 'Interview Link', 'Resume URL'];
   const rows = filteredApps.map(app => [
     `"${(app.drive?.name || app.job?.drive?.name || 'Campus Drive').replace(/"/g, '""')}"`,
     `"${(app.job?.title || 'N/A').replace(/"/g, '""')}"`,
@@ -39,7 +41,8 @@ const exportDriveReportCSV = (drives, jobs, apps, selectedDriveId) => {
     app.student?.academicDetails?.cgpa || 'N/A',
     `"${app.status || 'Applied'}"`,
     `"${app.interviewDate || 'N/A'}"`,
-    `"${app.interviewLink || 'N/A'}"`
+    `"${app.interviewLink || 'N/A'}"`,
+    `"${getResumeUrl(app.resumeUrl) || 'N/A'}"`
   ]);
 
   const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
@@ -92,7 +95,7 @@ const Dashboard = () => {
   // Search & Filter State
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Drive Form State (Admin)
+  // Drive Creation State (Admin)
   const [newDrive, setNewDrive] = useState({ 
     name: '', 
     description: '', 
@@ -101,21 +104,13 @@ const Dashboard = () => {
     endDate: '',
     status: 'Active' 
   });
+  const [driveErrors, setDriveErrors] = useState({});
 
-  // Student Profile State
-  const [studentProfile, setStudentProfile] = useState({ 
-    department: '', 
-    graduationYear: 2026, 
-    cgpa: '', 
-    activeBacklogs: 0,
-    skills: '',
-    certifications: '',
-    resumeUrl: ''
-  });
-
-  // Student Profile Resume Upload State
-  const [profileResumeFile, setProfileResumeFile] = useState(null);
-  const [isUploadingProfileResume, setIsUploadingProfileResume] = useState(false);
+  // Drive Editing State (Admin)
+  const [showEditDriveModal, setShowEditDriveModal] = useState(false);
+  const [editingDrive, setEditingDrive] = useState(null);
+  const [isSavingDrive, setIsSavingDrive] = useState(false);
+  const [editDriveErrors, setEditDriveErrors] = useState({});
 
   // Position Creation State (Company / Admin)
   const [newJob, setNewJob] = useState({
@@ -130,6 +125,33 @@ const Dashboard = () => {
     allowedDepartments: '',
     targetGraduationYear: 2026
   });
+  const [jobErrors, setJobErrors] = useState({});
+
+  // Position Editing State (Company / Admin)
+  const [showEditJobModal, setShowEditJobModal] = useState(false);
+  const [editingJob, setEditingJob] = useState(null);
+  const [isSavingJob, setIsSavingJob] = useState(false);
+  const [editJobErrors, setEditJobErrors] = useState({});
+
+  // In-App Resume Preview State
+  const [showResumeModal, setShowResumeModal] = useState(false);
+  const [previewResume, setPreviewResume] = useState({ url: '', studentName: '', positionTitle: '' });
+
+  // Student Profile State
+  const [studentProfile, setStudentProfile] = useState({ 
+    department: '', 
+    graduationYear: 2026, 
+    cgpa: '', 
+    activeBacklogs: 0,
+    skills: '',
+    certifications: '',
+    resumeUrl: ''
+  });
+  const [profileErrors, setProfileErrors] = useState({});
+
+  // Student Profile Resume Upload State
+  const [profileResumeFile, setProfileResumeFile] = useState(null);
+  const [isUploadingProfileResume, setIsUploadingProfileResume] = useState(false);
 
   // Application & Interview Modals
   const [selectedJobForApply, setSelectedJobForApply] = useState(null);
@@ -139,6 +161,7 @@ const Dashboard = () => {
   const [showInterviewModal, setShowInterviewModal] = useState(false);
   const [selectedAppForInterview, setSelectedAppForInterview] = useState(null);
   const [interviewDetails, setInterviewDetails] = useState({ date: '', time: '', link: '', stage: 'Technical Interview' });
+  const [interviewErrors, setInterviewErrors] = useState({});
 
   // Quick-Fill Missing Profile Modal State
   const [showQuickProfileModal, setShowQuickProfileModal] = useState(false);
@@ -150,6 +173,7 @@ const Dashboard = () => {
     resumeUrl: ''
   });
   const [quickResumeFile, setQuickResumeFile] = useState(null);
+  const [quickProfileErrors, setQuickProfileErrors] = useState({});
   const [isQuickSaving, setIsQuickSaving] = useState(false);
 
   // Sync Student Profile on User Load
@@ -310,16 +334,14 @@ const Dashboard = () => {
   // ================= ADMIN & COMPANY HANDLERS =================
   const handleCreateDrive = async (e) => {
     e.preventDefault();
-    const todayStr = new Date().toISOString().split('T')[0];
-    if (newDrive.startDate && newDrive.startDate < todayStr) {
-      return toast.error("Drive Start Date cannot be set in the past");
+    const validation = validateDrive(newDrive);
+    if (!validation.isValid) {
+      setDriveErrors(validation.errors);
+      const firstError = Object.values(validation.errors)[0];
+      return toast.error(firstError);
     }
-    if (newDrive.endDate && newDrive.startDate && newDrive.endDate < newDrive.startDate) {
-      return toast.error("Drive End Date cannot be earlier than Start Date");
-    }
-    if (newDrive.endDate && newDrive.endDate < todayStr) {
-      return toast.error("Drive End Date cannot be set in the past");
-    }
+    setDriveErrors({});
+
     try {
       const res = await API.post('/drives', newDrive);
       toast.success('Placement Drive Created Successfully!');
@@ -330,46 +352,83 @@ const Dashboard = () => {
     }
   };
 
+  const handleOpenEditDrive = (drive) => {
+    setEditingDrive({
+      _id: drive._id,
+      name: drive.name || '',
+      description: drive.description || '',
+      academicYear: drive.academicYear || '2025-2026',
+      startDate: drive.startDate ? new Date(drive.startDate).toISOString().split('T')[0] : '',
+      endDate: drive.endDate ? new Date(drive.endDate).toISOString().split('T')[0] : '',
+      status: drive.status || 'Active'
+    });
+    setEditDriveErrors({});
+    setShowEditDriveModal(true);
+  };
+
+  const handleSaveEditDrive = async (e) => {
+    e.preventDefault();
+    if (!editingDrive) return;
+
+    const validation = validateDrive(editingDrive);
+    if (!validation.isValid) {
+      setEditDriveErrors(validation.errors);
+      const firstError = Object.values(validation.errors)[0];
+      return toast.error(firstError);
+    }
+    setEditDriveErrors({});
+
+    setIsSavingDrive(true);
+    try {
+      const res = await API.put(`/drives/${editingDrive._id}`, editingDrive);
+      setDrives(drives.map(d => d._id === editingDrive._id ? res.data : d));
+      toast.success('Placement Drive updated successfully!');
+      setShowEditDriveModal(false);
+      setEditingDrive(null);
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to update placement drive');
+    } finally {
+      setIsSavingDrive(false);
+    }
+  };
+
   const handleUpdateDriveStatus = async (driveId, newStatus) => {
     try {
       const res = await API.put(`/drives/${driveId}`, { status: newStatus });
       setDrives(drives.map(d => d._id === driveId ? res.data : d));
       toast.success(`Drive status updated to ${newStatus}`);
     } catch (error) {
-      toast.error('Failed to update drive status');
+      toast.error(error.response?.data?.message || 'Failed to update drive status');
     }
   };
 
   const handleDeleteDrive = async (driveId) => {
-    if (!window.confirm("Are you sure you want to delete this placement drive?")) return;
+    if (!window.confirm("Are you sure you want to delete this placement drive? All associated postings will remain linked.")) return;
     try {
       await API.delete(`/drives/${driveId}`);
       setDrives(drives.filter(d => d._id !== driveId));
-      toast.success("Placement drive removed");
+      toast.success("Placement drive removed successfully");
     } catch (error) {
-      toast.error("Failed to delete drive");
+      toast.error(error.response?.data?.message || "Failed to delete drive");
     }
   };
 
   const handleCreateJob = async (e) => {
     e.preventDefault();
-    if (!newJob.drive) return toast.error("You must select a Placement Drive");
-    if (Number(newJob.minCgpa) < 0 || Number(newJob.minCgpa) > 10) {
-      return toast.error("Minimum CGPA required must be between 0 and 10");
+    const validation = validateJob(newJob);
+    if (!validation.isValid) {
+      setJobErrors(validation.errors);
+      const firstError = Object.values(validation.errors)[0];
+      return toast.error(firstError);
     }
-    if (Number(newJob.maxBacklogs) < 0) {
-      return toast.error("Maximum allowed backlogs cannot be negative");
-    }
-    if (Number(newJob.targetGraduationYear) < 2000) {
-      return toast.error("Please enter a valid Target Graduation Year");
-    }
+    setJobErrors({});
 
     const formattedJob = {
       ...newJob,
       eligibility: {
-        minCgpa: Number(newJob.minCgpa),
-        maxBacklogs: Number(newJob.maxBacklogs),
-        targetGraduationYear: Number(newJob.targetGraduationYear),
+        minCgpa: Number(newJob.minCgpa || 0),
+        maxBacklogs: Number(newJob.maxBacklogs || 0),
+        targetGraduationYear: Number(newJob.targetGraduationYear || 2026),
         allowedDepartments: typeof newJob.allowedDepartments === 'string' 
           ? newJob.allowedDepartments.split(',').map(d => d.trim()).filter(Boolean)
           : newJob.allowedDepartments
@@ -390,6 +449,71 @@ const Dashboard = () => {
     }
   };
 
+  const handleOpenEditJob = (job) => {
+    const driveId = typeof job.drive === 'object' ? job.drive?._id : job.drive;
+    const allowedDepts = job.eligibility?.allowedDepartments;
+    const deptsString = Array.isArray(allowedDepts) ? allowedDepts.join(', ') : (allowedDepts || '');
+
+    setEditingJob({
+      _id: job._id,
+      title: job.title || '',
+      description: job.description || '',
+      requirements: job.requirements || '',
+      location: job.location || '',
+      salary: job.salary || '',
+      drive: driveId || '',
+      minCgpa: job.eligibility?.minCgpa !== undefined ? job.eligibility.minCgpa : 0,
+      maxBacklogs: job.eligibility?.maxBacklogs !== undefined ? job.eligibility.maxBacklogs : 0,
+      allowedDepartments: deptsString,
+      targetGraduationYear: job.eligibility?.targetGraduationYear || 2026
+    });
+    setEditJobErrors({});
+    setShowEditJobModal(true);
+  };
+
+  const handleSaveEditJob = async (e) => {
+    e.preventDefault();
+    if (!editingJob) return;
+
+    const validation = validateJob(editingJob);
+    if (!validation.isValid) {
+      setEditJobErrors(validation.errors);
+      const firstError = Object.values(validation.errors)[0];
+      return toast.error(firstError);
+    }
+    setEditJobErrors({});
+
+    const payload = {
+      title: editingJob.title,
+      description: editingJob.description,
+      requirements: editingJob.requirements,
+      location: editingJob.location,
+      salary: editingJob.salary,
+      drive: editingJob.drive,
+      eligibility: {
+        minCgpa: Number(editingJob.minCgpa || 0),
+        maxBacklogs: Number(editingJob.maxBacklogs || 0),
+        targetGraduationYear: Number(editingJob.targetGraduationYear || 2026),
+        allowedDepartments: typeof editingJob.allowedDepartments === 'string'
+          ? editingJob.allowedDepartments.split(',').map(d => d.trim()).filter(Boolean)
+          : editingJob.allowedDepartments
+      }
+    };
+
+    setIsSavingJob(true);
+    try {
+      const res = await API.put(`/jobs/${editingJob._id}`, payload);
+      setJobs(jobs.map(j => j._id === editingJob._id ? res.data : j));
+      toast.success('Position updated successfully!');
+      setShowEditJobModal(false);
+      setEditingJob(null);
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to update position');
+    } finally {
+      setIsSavingJob(false);
+    }
+  };
+
   const handleDeleteJob = async (jobId) => {
     if (!window.confirm("Delete this position?")) return;
     try {
@@ -397,14 +521,28 @@ const Dashboard = () => {
       setJobs(jobs.filter(job => job._id !== jobId));
       toast.success("Job position removed");
     } catch (error) {
-      toast.error("Failed to delete job");
+      toast.error(error.response?.data?.message || "Failed to delete job");
     }
+  };
+
+  const handlePreviewResume = (url, studentName = 'Candidate', positionTitle = '') => {
+    const resolvedUrl = getResumeUrl(url);
+    if (!resolvedUrl) {
+      return toast.error("No valid resume document URL available to preview.");
+    }
+    setPreviewResume({
+      url: resolvedUrl,
+      studentName,
+      positionTitle
+    });
+    setShowResumeModal(true);
   };
 
   const handleStatusChange = async (appId, newStatus) => {
     if (newStatus === 'Technical Interview' || newStatus === 'HR Interview') {
       setSelectedAppForInterview(appId);
       setInterviewDetails(prev => ({ ...prev, stage: newStatus }));
+      setInterviewErrors({});
       setShowInterviewModal(true);
       return; 
     }
@@ -413,16 +551,20 @@ const Dashboard = () => {
       setApplications(applications.map(app => app._id === appId ? (res.data || { ...app, status: newStatus }) : app));
       toast.success(`Application updated to stage: ${newStatus}`);
     } catch (error) {
-      toast.error('Failed to update stage');
+      toast.error(error.response?.data?.message || 'Failed to update stage');
     }
   };
 
   const handleScheduleInterview = async (e) => {
     e.preventDefault();
-    const todayStr = new Date().toISOString().split('T')[0];
-    if (interviewDetails.date < todayStr) {
-      return toast.error("Interview Date cannot be scheduled in the past");
+    const validation = validateInterview(interviewDetails);
+    if (!validation.isValid) {
+      setInterviewErrors(validation.errors);
+      const firstError = Object.values(validation.errors)[0];
+      return toast.error(firstError);
     }
+    setInterviewErrors({});
+
     try {
       const res = await API.put(`/applications/${selectedAppForInterview}/status`, { 
         status: interviewDetails.stage,
@@ -447,19 +589,21 @@ const Dashboard = () => {
       setApplications(applications.map(app => app._id === appId ? (updatedApp || { ...app, status: 'Terminated' }) : app));
       toast.success("Application marked as Terminated. Historical submission preserved in drive analytics!");
     } catch (error) {
-      toast.error("Failed to terminate application");
+      toast.error(error.response?.data?.message || "Failed to terminate application");
     }
   };
 
   // ================= STUDENT HANDLERS =================
   const handleSaveProfile = async (e) => {
     e.preventDefault();
-    if (studentProfile.cgpa !== '' && studentProfile.cgpa !== undefined && (Number(studentProfile.cgpa) < 0 || Number(studentProfile.cgpa) > 10)) {
-      return toast.error("CGPA must be between 0 and 10");
+    const validation = validateStudentProfile(studentProfile);
+    if (!validation.isValid) {
+      setProfileErrors(validation.errors);
+      const firstError = Object.values(validation.errors)[0];
+      return toast.error(firstError);
     }
-    if (Number(studentProfile.activeBacklogs) < 0) {
-      return toast.error("Active backlogs cannot be negative");
-    }
+    setProfileErrors({});
+
     try {
       const payload = {
         department: studentProfile.department,
@@ -483,12 +627,17 @@ const Dashboard = () => {
 
   const handleSaveQuickProfile = async (e) => {
     e.preventDefault();
-    if (quickProfileData.cgpa !== '' && quickProfileData.cgpa !== undefined && (Number(quickProfileData.cgpa) < 0 || Number(quickProfileData.cgpa) > 10)) {
-      return toast.error("CGPA must be between 0 and 10");
+    const validation = validateStudentProfile({
+      ...quickProfileData,
+      resumeUrl: quickProfileData.resumeUrl || (quickResumeFile ? 'pending_upload' : '')
+    });
+    if (!validation.isValid && !quickResumeFile) {
+      setQuickProfileErrors(validation.errors);
+      const firstError = Object.values(validation.errors)[0];
+      return toast.error(firstError);
     }
-    if (Number(quickProfileData.activeBacklogs) < 0) {
-      return toast.error("Active backlogs cannot be negative");
-    }
+    setQuickProfileErrors({});
+
     try {
       setIsQuickSaving(true);
       let uploadedResumeUrl = quickProfileData.resumeUrl || studentProfile.resumeUrl || user.academicDetails?.resumeUrl || '';
@@ -1336,48 +1485,75 @@ const Dashboard = () => {
               <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
                 <h3 className="text-xl font-bold text-white mb-4">Initialize Placement Drive</h3>
                 <form onSubmit={handleCreateDrive} className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <input 
-                    type="text" 
-                    required 
-                    placeholder="Drive Name (e.g. Campus Placement Drive 2026)" 
-                    value={newDrive.name} 
-                    onChange={(e) => setNewDrive({...newDrive, name: e.target.value})} 
-                    className="px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500" 
-                  />
-                  <input 
-                    type="text" 
-                    placeholder="Academic Year (e.g. 2025-2026)" 
-                    value={newDrive.academicYear} 
-                    onChange={(e) => setNewDrive({...newDrive, academicYear: e.target.value})} 
-                    className="px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500" 
-                  />
-                  <input 
-                    type="text" 
-                    placeholder="Description (Optional)" 
-                    value={newDrive.description} 
-                    onChange={(e) => setNewDrive({...newDrive, description: e.target.value})} 
-                    className="px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500" 
-                  />
+                  <div>
+                    <input 
+                      type="text" 
+                      required 
+                      placeholder="Drive Name (e.g. Campus Placement Drive 2026)" 
+                      value={newDrive.name} 
+                      onChange={(e) => {
+                        setNewDrive({...newDrive, name: e.target.value});
+                        if (driveErrors.name) setDriveErrors(prev => ({...prev, name: null}));
+                      }} 
+                      className={`w-full px-4 py-2.5 bg-gray-900/60 border rounded-xl text-white outline-none focus:border-blue-500 ${driveErrors.name ? 'border-red-500' : 'border-gray-600'}`} 
+                    />
+                    {driveErrors.name && <p className="text-red-400 text-xs mt-1">{driveErrors.name}</p>}
+                  </div>
+
+                  <div>
+                    <input 
+                      type="text" 
+                      placeholder="Academic Year (e.g. 2025-2026)" 
+                      value={newDrive.academicYear} 
+                      onChange={(e) => {
+                        setNewDrive({...newDrive, academicYear: e.target.value});
+                        if (driveErrors.academicYear) setDriveErrors(prev => ({...prev, academicYear: null}));
+                      }} 
+                      className={`w-full px-4 py-2.5 bg-gray-900/60 border rounded-xl text-white outline-none focus:border-blue-500 ${driveErrors.academicYear ? 'border-red-500' : 'border-gray-600'}`} 
+                    />
+                    {driveErrors.academicYear && <p className="text-red-400 text-xs mt-1">{driveErrors.academicYear}</p>}
+                  </div>
+
+                  <div>
+                    <input 
+                      type="text" 
+                      placeholder="Description (Optional)" 
+                      value={newDrive.description} 
+                      onChange={(e) => setNewDrive({...newDrive, description: e.target.value})} 
+                      className="w-full px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500" 
+                    />
+                  </div>
+
                   <div>
                     <label className="block text-xs font-semibold text-gray-400 mb-1">Start Date</label>
                     <input 
                       type="date" 
                       min={new Date().toISOString().split('T')[0]}
                       value={newDrive.startDate} 
-                      onChange={(e) => setNewDrive({...newDrive, startDate: e.target.value})} 
-                      className="w-full px-4 py-2 bg-gray-900/60 border border-gray-600 rounded-xl text-white text-xs outline-none focus:border-blue-500" 
+                      onChange={(e) => {
+                        setNewDrive({...newDrive, startDate: e.target.value});
+                        if (driveErrors.startDate) setDriveErrors(prev => ({...prev, startDate: null}));
+                      }} 
+                      className={`w-full px-4 py-2 bg-gray-900/60 border rounded-xl text-white text-xs outline-none focus:border-blue-500 ${driveErrors.startDate ? 'border-red-500' : 'border-gray-600'}`} 
                     />
+                    {driveErrors.startDate && <p className="text-red-400 text-xs mt-1">{driveErrors.startDate}</p>}
                   </div>
+
                   <div>
                     <label className="block text-xs font-semibold text-gray-400 mb-1">End Date</label>
                     <input 
                       type="date" 
                       min={newDrive.startDate || new Date().toISOString().split('T')[0]}
                       value={newDrive.endDate} 
-                      onChange={(e) => setNewDrive({...newDrive, endDate: e.target.value})} 
-                      className="w-full px-4 py-2 bg-gray-900/60 border border-gray-600 rounded-xl text-white text-xs outline-none focus:border-blue-500" 
+                      onChange={(e) => {
+                        setNewDrive({...newDrive, endDate: e.target.value});
+                        if (driveErrors.endDate) setDriveErrors(prev => ({...prev, endDate: null}));
+                      }} 
+                      className={`w-full px-4 py-2 bg-gray-900/60 border rounded-xl text-white text-xs outline-none focus:border-blue-500 ${driveErrors.endDate ? 'border-red-500' : 'border-gray-600'}`} 
                     />
+                    {driveErrors.endDate && <p className="text-red-400 text-xs mt-1">{driveErrors.endDate}</p>}
                   </div>
+
                   <div className="flex items-end">
                     <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold px-6 py-2.5 rounded-xl transition-colors shadow-md">
                       Create Placement Drive
@@ -1389,7 +1565,7 @@ const Dashboard = () => {
               {/* Drives List */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 {drives.map(drive => (
-                  <div key={drive._id} className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg flex flex-col justify-between">
+                  <div key={drive._id} className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg flex flex-col justify-between hover:border-gray-600 transition-all">
                     <div>
                       <div className="flex justify-between items-start mb-2">
                         <h4 className="text-lg font-bold text-white">{drive.name}</h4>
@@ -1421,18 +1597,27 @@ const Dashboard = () => {
                       </div>
                     </div>
 
-                    <div className="pt-4 border-t border-gray-700 flex justify-between items-center">
-                      <select 
-                        value={drive.status} 
-                        onChange={(e) => handleUpdateDriveStatus(drive._id, e.target.value)}
-                        className="bg-gray-900 text-xs font-semibold text-gray-300 border border-gray-700 rounded-lg px-2.5 py-1 outline-none"
-                      >
-                        <option value="Upcoming">Upcoming</option>
-                        <option value="Active">Active</option>
-                        <option value="Completed">Completed</option>
-                      </select>
+                    <div className="pt-4 border-t border-gray-700 flex flex-wrap justify-between items-center gap-2">
+                      <div className="flex items-center gap-2">
+                        <select 
+                          value={drive.status} 
+                          onChange={(e) => handleUpdateDriveStatus(drive._id, e.target.value)}
+                          className="bg-gray-900 text-xs font-semibold text-gray-300 border border-gray-700 rounded-lg px-2.5 py-1.5 outline-none cursor-pointer"
+                        >
+                          <option value="Upcoming">Upcoming</option>
+                          <option value="Active">Active</option>
+                          <option value="Completed">Completed</option>
+                        </select>
+                        <button 
+                          onClick={() => handleOpenEditDrive(drive)}
+                          className="text-xs bg-blue-900/40 hover:bg-blue-600 text-blue-300 hover:text-white font-bold px-3 py-1.5 rounded-lg border border-blue-700/50 transition-colors flex items-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
+                          Edit
+                        </button>
+                      </div>
                       <button onClick={() => handleDeleteDrive(drive._id)} className="text-xs text-red-400 hover:text-red-300 font-bold px-2 py-1">
-                        Delete Drive
+                        Delete
                       </button>
                     </div>
                   </div>
@@ -1466,9 +1651,18 @@ const Dashboard = () => {
                           Min CGPA: {job.eligibility?.minCgpa || 0} | Max Backlogs: {job.eligibility?.maxBacklogs ?? 0}
                         </td>
                         <td className="px-6 py-4 text-right">
-                          <button onClick={() => handleDeleteJob(job._id)} className="text-red-400 hover:text-red-300 font-medium px-3 py-1 bg-red-950/40 rounded-lg border border-red-800/50">
-                            Delete
-                          </button>
+                          <div className="flex justify-end items-center gap-2">
+                            <button 
+                              onClick={() => handleOpenEditJob(job)} 
+                              className="text-blue-400 hover:text-blue-300 font-medium px-3 py-1 bg-blue-950/40 rounded-lg border border-blue-800/50 hover:bg-blue-900/60 transition-colors flex items-center gap-1 text-xs"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
+                              Edit
+                            </button>
+                            <button onClick={() => handleDeleteJob(job._id)} className="text-red-400 hover:text-red-300 font-medium px-3 py-1 bg-red-950/40 rounded-lg border border-red-800/50 text-xs">
+                              Delete
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1505,7 +1699,26 @@ const Dashboard = () => {
                           <p className="text-xs text-gray-300">{app.job?.title} ({app.job?.company?.name})</p>
                         </td>
                         <td className="px-6 py-4">
-                          <a href={app.resumeUrl} target="_blank" rel="noopener noreferrer" className="text-blue-400 underline hover:text-blue-300 text-xs">View Resume</a>
+                          {app.resumeUrl ? (
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => handlePreviewResume(app.resumeUrl, app.student?.name || 'Student', app.job?.title || '')}
+                                className="text-xs bg-blue-900/40 hover:bg-blue-600 text-blue-300 hover:text-white px-2.5 py-1 rounded-lg border border-blue-700/50 transition-colors font-semibold"
+                              >
+                                Preview
+                              </button>
+                              <a 
+                                href={getResumeUrl(app.resumeUrl)} 
+                                target="_blank" 
+                                rel="noopener noreferrer" 
+                                className="text-gray-400 hover:text-white text-xs underline"
+                              >
+                                Open
+                              </a>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-500 italic">No resume</span>
+                          )}
                         </td>
                         <td className="px-6 py-4">
                           <select 
@@ -1676,22 +1889,48 @@ const Dashboard = () => {
                   <select 
                     required 
                     value={newJob.drive} 
-                    onChange={(e) => setNewJob({...newJob, drive: e.target.value})} 
-                    className="w-full px-4 py-3 bg-gray-900/60 rounded-xl text-white outline-none border border-blue-500/50 focus:border-blue-500"
+                    onChange={(e) => {
+                      setNewJob({...newJob, drive: e.target.value});
+                      if (jobErrors.drive) setJobErrors(prev => ({...prev, drive: null}));
+                    }} 
+                    className={`w-full px-4 py-3 bg-gray-900/60 rounded-xl text-white outline-none border focus:border-blue-500 ${jobErrors.drive ? 'border-red-500' : 'border-blue-500/50'}`}
                   >
                     <option value="">-- Select Active Placement Drive --</option>
                     {drives.map(d => <option key={d._id} value={d._id}>{d.name} ({d.academicYear || '2025-2026'})</option>)}
                   </select>
+                  {jobErrors.drive && <p className="text-red-400 text-xs mt-1">{jobErrors.drive}</p>}
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-4 border-t border-gray-700">
                   <div>
                     <label className="block text-sm font-semibold text-gray-300 mb-1.5">Position Title</label>
-                    <input type="text" required placeholder="e.g. Software Developer" value={newJob.title} onChange={(e) => setNewJob({...newJob, title: e.target.value})} className="w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border border-gray-600 focus:border-blue-500" />
+                    <input 
+                      type="text" 
+                      required 
+                      placeholder="e.g. Software Developer" 
+                      value={newJob.title} 
+                      onChange={(e) => {
+                        setNewJob({...newJob, title: e.target.value});
+                        if (jobErrors.title) setJobErrors(prev => ({...prev, title: null}));
+                      }} 
+                      className={`w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border focus:border-blue-500 ${jobErrors.title ? 'border-red-500' : 'border-gray-600'}`} 
+                    />
+                    {jobErrors.title && <p className="text-red-400 text-xs mt-1">{jobErrors.title}</p>}
                   </div>
                   <div>
                     <label className="block text-sm font-semibold text-gray-300 mb-1.5">Location</label>
-                    <input type="text" required placeholder="e.g. Bengaluru / Remote" value={newJob.location} onChange={(e) => setNewJob({...newJob, location: e.target.value})} className="w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border border-gray-600 focus:border-blue-500" />
+                    <input 
+                      type="text" 
+                      required 
+                      placeholder="e.g. Bengaluru / Remote" 
+                      value={newJob.location} 
+                      onChange={(e) => {
+                        setNewJob({...newJob, location: e.target.value});
+                        if (jobErrors.location) setJobErrors(prev => ({...prev, location: null}));
+                      }} 
+                      className={`w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border focus:border-blue-500 ${jobErrors.location ? 'border-red-500' : 'border-gray-600'}`} 
+                    />
+                    {jobErrors.location && <p className="text-red-400 text-xs mt-1">{jobErrors.location}</p>}
                   </div>
                   <div>
                     <label className="block text-sm font-semibold text-gray-300 mb-1.5">Salary Package (CTC)</label>
@@ -1699,15 +1938,49 @@ const Dashboard = () => {
                   </div>
                   <div>
                     <label className="block text-sm font-semibold text-yellow-400 mb-1.5">Target Graduation Year</label>
-                    <input type="number" required value={newJob.targetGraduationYear} onChange={(e) => setNewJob({...newJob, targetGraduationYear: e.target.value})} className="w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border border-gray-600 focus:border-yellow-500" />
+                    <input 
+                      type="number" 
+                      required 
+                      value={newJob.targetGraduationYear} 
+                      onChange={(e) => {
+                        setNewJob({...newJob, targetGraduationYear: e.target.value});
+                        if (jobErrors.targetGraduationYear) setJobErrors(prev => ({...prev, targetGraduationYear: null}));
+                      }} 
+                      className={`w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border focus:border-yellow-500 ${jobErrors.targetGraduationYear ? 'border-red-500' : 'border-gray-600'}`} 
+                    />
+                    {jobErrors.targetGraduationYear && <p className="text-red-400 text-xs mt-1">{jobErrors.targetGraduationYear}</p>}
                   </div>
                   <div>
-                    <label className="block text-sm font-semibold text-yellow-400 mb-1.5">Minimum CGPA Required</label>
-                    <input type="number" step="0.1" required value={newJob.minCgpa} onChange={(e) => setNewJob({...newJob, minCgpa: e.target.value})} className="w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border border-gray-600 focus:border-yellow-500" />
+                    <label className="block text-sm font-semibold text-yellow-400 mb-1.5">Minimum CGPA Required (0 - 10)</label>
+                    <input 
+                      type="number" 
+                      step="0.1" 
+                      max="10"
+                      min="0"
+                      required 
+                      value={newJob.minCgpa} 
+                      onChange={(e) => {
+                        setNewJob({...newJob, minCgpa: e.target.value});
+                        if (jobErrors.minCgpa) setJobErrors(prev => ({...prev, minCgpa: null}));
+                      }} 
+                      className={`w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border focus:border-yellow-500 ${jobErrors.minCgpa ? 'border-red-500' : 'border-gray-600'}`} 
+                    />
+                    {jobErrors.minCgpa && <p className="text-red-400 text-xs mt-1">{jobErrors.minCgpa}</p>}
                   </div>
                   <div>
                     <label className="block text-sm font-semibold text-yellow-400 mb-1.5">Max Active Backlogs Allowed</label>
-                    <input type="number" required value={newJob.maxBacklogs} onChange={(e) => setNewJob({...newJob, maxBacklogs: e.target.value})} className="w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border border-gray-600 focus:border-yellow-500" />
+                    <input 
+                      type="number" 
+                      min="0"
+                      required 
+                      value={newJob.maxBacklogs} 
+                      onChange={(e) => {
+                        setNewJob({...newJob, maxBacklogs: e.target.value});
+                        if (jobErrors.maxBacklogs) setJobErrors(prev => ({...prev, maxBacklogs: null}));
+                      }} 
+                      className={`w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border focus:border-yellow-500 ${jobErrors.maxBacklogs ? 'border-red-500' : 'border-gray-600'}`} 
+                    />
+                    {jobErrors.maxBacklogs && <p className="text-red-400 text-xs mt-1">{jobErrors.maxBacklogs}</p>}
                   </div>
                   <div className="md:col-span-2">
                     <label className="block text-sm font-semibold text-yellow-400 mb-1.5">Allowed Departments (Comma Separated)</label>
@@ -1717,8 +1990,30 @@ const Dashboard = () => {
 
                 <div className="pt-4 border-t border-gray-700">
                   <label className="block text-sm font-semibold text-gray-300 mb-1.5">Job Description & Responsibilities</label>
-                  <textarea required rows="4" value={newJob.description} onChange={(e) => setNewJob({...newJob, description: e.target.value})} className="w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border border-gray-600 focus:border-blue-500 mb-4"></textarea>
-                  <input type="text" required placeholder="Required Tech Stack (e.g. MERN Stack, Python, AWS)" value={newJob.requirements} onChange={(e) => setNewJob({...newJob, requirements: e.target.value})} className="w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border border-gray-600 focus:border-blue-500" />
+                  <textarea 
+                    required 
+                    rows="4" 
+                    value={newJob.description} 
+                    onChange={(e) => {
+                      setNewJob({...newJob, description: e.target.value});
+                      if (jobErrors.description) setJobErrors(prev => ({...prev, description: null}));
+                    }} 
+                    className={`w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border focus:border-blue-500 mb-1 ${jobErrors.description ? 'border-red-500' : 'border-gray-600'}`}
+                  ></textarea>
+                  {jobErrors.description && <p className="text-red-400 text-xs mb-3">{jobErrors.description}</p>}
+
+                  <input 
+                    type="text" 
+                    required 
+                    placeholder="Required Tech Stack (e.g. MERN Stack, Python, AWS)" 
+                    value={newJob.requirements} 
+                    onChange={(e) => {
+                      setNewJob({...newJob, requirements: e.target.value});
+                      if (jobErrors.requirements) setJobErrors(prev => ({...prev, requirements: null}));
+                    }} 
+                    className={`w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border focus:border-blue-500 mt-2 ${jobErrors.requirements ? 'border-red-500' : 'border-gray-600'}`} 
+                  />
+                  {jobErrors.requirements && <p className="text-red-400 text-xs mt-1">{jobErrors.requirements}</p>}
                 </div>
 
                 <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl transition-colors shadow-lg">
@@ -1749,9 +2044,18 @@ const Dashboard = () => {
                         <td className="px-6 py-4 text-blue-400 font-semibold">{job.drive?.name || 'Campus Drive'}</td>
                         <td className="px-6 py-4">{job.eligibility?.minCgpa || 0}</td>
                         <td className="px-6 py-4 text-right">
-                          <button onClick={() => handleDeleteJob(job._id)} className="text-red-400 hover:text-red-300 px-3 py-1 bg-red-950/40 rounded-lg border border-red-800/50">
-                            Withdraw
-                          </button>
+                          <div className="flex justify-end items-center gap-2">
+                            <button 
+                              onClick={() => handleOpenEditJob(job)} 
+                              className="text-blue-400 hover:text-blue-300 font-medium px-3 py-1 bg-blue-950/40 rounded-lg border border-blue-800/50 hover:bg-blue-900/60 transition-colors flex items-center gap-1 text-xs"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
+                              Edit
+                            </button>
+                            <button onClick={() => handleDeleteJob(job._id)} className="text-red-400 hover:text-red-300 px-3 py-1 bg-red-950/40 rounded-lg border border-red-800/50 hover:bg-red-900/60 transition-colors text-xs font-medium">
+                              Withdraw
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1785,7 +2089,26 @@ const Dashboard = () => {
                           {app.student?.academicDetails?.department} | CGPA: {app.student?.academicDetails?.cgpa}
                         </td>
                         <td className="px-6 py-4">
-                          <a href={app.resumeUrl} target="_blank" rel="noopener noreferrer" className="text-blue-400 underline font-semibold text-xs">View Resume</a>
+                          {app.resumeUrl ? (
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => handlePreviewResume(app.resumeUrl, app.student?.name || 'Candidate', app.job?.title || '')}
+                                className="text-xs bg-blue-900/40 hover:bg-blue-600 text-blue-300 hover:text-white px-2.5 py-1 rounded-lg border border-blue-700/50 transition-colors font-semibold"
+                              >
+                                Preview
+                              </button>
+                              <a 
+                                href={getResumeUrl(app.resumeUrl)} 
+                                target="_blank" 
+                                rel="noopener noreferrer" 
+                                className="text-gray-400 hover:text-white text-xs underline"
+                              >
+                                Open
+                              </a>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-500 italic">No resume</span>
+                          )}
                         </td>
                         <td className="px-6 py-4 text-right">
                           <select 
@@ -2096,6 +2419,413 @@ const Dashboard = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= EDIT PLACEMENT DRIVE MODAL ================= */}
+      {showEditDriveModal && editingDrive && (
+        <div className="fixed inset-0 pt-16 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in p-4 overflow-y-auto">
+          <div className="bg-gray-800 p-6 md:p-8 rounded-2xl border border-blue-500/50 max-w-xl w-full shadow-2xl space-y-5 my-auto">
+            <div className="flex justify-between items-start border-b border-gray-700 pb-3">
+              <div>
+                <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                  <span>✏️ Edit Placement Drive</span>
+                </h3>
+                <p className="text-gray-400 text-xs mt-0.5">Update placement drive timeline, details, and active status</p>
+              </div>
+              <button 
+                onClick={() => { setShowEditDriveModal(false); setEditingDrive(null); }}
+                className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-700 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditDrive} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-300 mb-1">Drive Name</label>
+                <input 
+                  type="text" 
+                  required 
+                  value={editingDrive.name} 
+                  onChange={(e) => {
+                    setEditingDrive({...editingDrive, name: e.target.value});
+                    if (editDriveErrors.name) setEditDriveErrors(prev => ({...prev, name: null}));
+                  }}
+                  className={`w-full px-4 py-2.5 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-blue-500 ${editDriveErrors.name ? 'border-red-500' : 'border-gray-600'}`}
+                />
+                {editDriveErrors.name && <p className="text-red-400 text-xs mt-1">{editDriveErrors.name}</p>}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">Academic Year</label>
+                  <input 
+                    type="text" 
+                    value={editingDrive.academicYear} 
+                    onChange={(e) => {
+                      setEditingDrive({...editingDrive, academicYear: e.target.value});
+                      if (editDriveErrors.academicYear) setEditDriveErrors(prev => ({...prev, academicYear: null}));
+                    }}
+                    placeholder="e.g. 2025-2026"
+                    className={`w-full px-4 py-2.5 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-blue-500 ${editDriveErrors.academicYear ? 'border-red-500' : 'border-gray-600'}`}
+                  />
+                  {editDriveErrors.academicYear && <p className="text-red-400 text-xs mt-1">{editDriveErrors.academicYear}</p>}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">Drive Status</label>
+                  <select 
+                    value={editingDrive.status} 
+                    onChange={(e) => setEditingDrive({...editingDrive, status: e.target.value})}
+                    className="w-full px-4 py-2.5 bg-gray-900 border border-gray-600 rounded-xl text-white text-sm outline-none focus:border-blue-500"
+                  >
+                    <option value="Upcoming">Upcoming</option>
+                    <option value="Active">Active</option>
+                    <option value="Completed">Completed</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-300 mb-1">Description</label>
+                <textarea 
+                  rows="3" 
+                  value={editingDrive.description} 
+                  onChange={(e) => setEditingDrive({...editingDrive, description: e.target.value})}
+                  placeholder="Overview of this placement drive..."
+                  className="w-full px-4 py-2.5 bg-gray-900 border border-gray-600 rounded-xl text-white text-sm outline-none focus:border-blue-500"
+                ></textarea>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 mb-1">Start Date</label>
+                  <input 
+                    type="date" 
+                    value={editingDrive.startDate} 
+                    onChange={(e) => {
+                      setEditingDrive({...editingDrive, startDate: e.target.value});
+                      if (editDriveErrors.startDate) setEditDriveErrors(prev => ({...prev, startDate: null}));
+                    }}
+                    className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-xs outline-none focus:border-blue-500 ${editDriveErrors.startDate ? 'border-red-500' : 'border-gray-600'}`}
+                  />
+                  {editDriveErrors.startDate && <p className="text-red-400 text-xs mt-1">{editDriveErrors.startDate}</p>}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 mb-1">End Date</label>
+                  <input 
+                    type="date" 
+                    min={editingDrive.startDate || undefined}
+                    value={editingDrive.endDate} 
+                    onChange={(e) => {
+                      setEditingDrive({...editingDrive, endDate: e.target.value});
+                      if (editDriveErrors.endDate) setEditDriveErrors(prev => ({...prev, endDate: null}));
+                    }}
+                    className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-xs outline-none focus:border-blue-500 ${editDriveErrors.endDate ? 'border-red-500' : 'border-gray-600'}`}
+                  />
+                  {editDriveErrors.endDate && <p className="text-red-400 text-xs mt-1">{editDriveErrors.endDate}</p>}
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-3 border-t border-gray-700">
+                <button 
+                  type="button" 
+                  onClick={() => { setShowEditDriveModal(false); setEditingDrive(null); }}
+                  className="flex-1 px-4 py-2.5 bg-gray-700 text-gray-200 rounded-xl text-sm font-semibold hover:bg-gray-600 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  disabled={isSavingDrive}
+                  className="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold shadow-lg transition-colors disabled:opacity-50"
+                >
+                  {isSavingDrive ? 'Saving Changes...' : 'Save Drive Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= EDIT JOB POSITION MODAL ================= */}
+      {showEditJobModal && editingJob && (
+        <div className="fixed inset-0 pt-16 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in p-4 overflow-y-auto">
+          <div className="bg-gray-800 p-6 md:p-8 rounded-2xl border border-blue-500/50 max-w-2xl w-full shadow-2xl space-y-5 my-auto">
+            <div className="flex justify-between items-start border-b border-gray-700 pb-3">
+              <div>
+                <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                  <span>✏️ Edit Drive Position</span>
+                </h3>
+                <p className="text-gray-400 text-xs mt-0.5">Modify role specifications, location, salary, and eligibility criteria</p>
+              </div>
+              <button 
+                onClick={() => { setShowEditJobModal(false); setEditingJob(null); }}
+                className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-700 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditJob} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-blue-400 mb-1">Target Placement Drive</label>
+                <select 
+                  required 
+                  value={editingJob.drive} 
+                  onChange={(e) => {
+                    setEditingJob({...editingJob, drive: e.target.value});
+                    if (editJobErrors.drive) setEditJobErrors(prev => ({...prev, drive: null}));
+                  }}
+                  className={`w-full px-4 py-2.5 bg-gray-900 rounded-xl text-white text-sm outline-none border focus:border-blue-500 ${editJobErrors.drive ? 'border-red-500' : 'border-blue-500/50'}`}
+                >
+                  <option value="">-- Select Placement Drive --</option>
+                  {drives.map(d => <option key={d._id} value={d._id}>{d.name} ({d.academicYear || '2025-2026'})</option>)}
+                </select>
+                {editJobErrors.drive && <p className="text-red-400 text-xs mt-1">{editJobErrors.drive}</p>}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">Position Title</label>
+                  <input 
+                    type="text" 
+                    required 
+                    value={editingJob.title} 
+                    onChange={(e) => {
+                      setEditingJob({...editingJob, title: e.target.value});
+                      if (editJobErrors.title) setEditJobErrors(prev => ({...prev, title: null}));
+                    }}
+                    className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-blue-500 ${editJobErrors.title ? 'border-red-500' : 'border-gray-600'}`}
+                  />
+                  {editJobErrors.title && <p className="text-red-400 text-xs mt-1">{editJobErrors.title}</p>}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">Location</label>
+                  <input 
+                    type="text" 
+                    required 
+                    value={editingJob.location} 
+                    onChange={(e) => {
+                      setEditingJob({...editingJob, location: e.target.value});
+                      if (editJobErrors.location) setEditJobErrors(prev => ({...prev, location: null}));
+                    }}
+                    className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-blue-500 ${editJobErrors.location ? 'border-red-500' : 'border-gray-600'}`}
+                  />
+                  {editJobErrors.location && <p className="text-red-400 text-xs mt-1">{editJobErrors.location}</p>}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">Salary Package (CTC)</label>
+                  <input 
+                    type="text" 
+                    value={editingJob.salary} 
+                    onChange={(e) => setEditingJob({...editingJob, salary: e.target.value})}
+                    placeholder="e.g. ₹8,00,000 LPA"
+                    className="w-full px-4 py-2 bg-gray-900 border border-gray-600 rounded-xl text-white text-sm outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-yellow-400 mb-1">Target Graduation Year</label>
+                  <input 
+                    type="number" 
+                    required 
+                    value={editingJob.targetGraduationYear} 
+                    onChange={(e) => {
+                      setEditingJob({...editingJob, targetGraduationYear: e.target.value});
+                      if (editJobErrors.targetGraduationYear) setEditJobErrors(prev => ({...prev, targetGraduationYear: null}));
+                    }}
+                    className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-yellow-500 ${editJobErrors.targetGraduationYear ? 'border-red-500' : 'border-gray-600'}`}
+                  />
+                  {editJobErrors.targetGraduationYear && <p className="text-red-400 text-xs mt-1">{editJobErrors.targetGraduationYear}</p>}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-yellow-400 mb-1">Minimum CGPA Required (0 - 10)</label>
+                  <input 
+                    type="number" 
+                    step="0.1" 
+                    max="10"
+                    min="0"
+                    required 
+                    value={editingJob.minCgpa} 
+                    onChange={(e) => {
+                      setEditingJob({...editingJob, minCgpa: e.target.value});
+                      if (editJobErrors.minCgpa) setEditJobErrors(prev => ({...prev, minCgpa: null}));
+                    }}
+                    className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-yellow-500 ${editJobErrors.minCgpa ? 'border-red-500' : 'border-gray-600'}`}
+                  />
+                  {editJobErrors.minCgpa && <p className="text-red-400 text-xs mt-1">{editJobErrors.minCgpa}</p>}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-yellow-400 mb-1">Max Active Backlogs Allowed</label>
+                  <input 
+                    type="number" 
+                    min="0"
+                    required 
+                    value={editingJob.maxBacklogs} 
+                    onChange={(e) => {
+                      setEditingJob({...editingJob, maxBacklogs: e.target.value});
+                      if (editJobErrors.maxBacklogs) setEditJobErrors(prev => ({...prev, maxBacklogs: null}));
+                    }}
+                    className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-yellow-500 ${editJobErrors.maxBacklogs ? 'border-red-500' : 'border-gray-600'}`}
+                  />
+                  {editJobErrors.maxBacklogs && <p className="text-red-400 text-xs mt-1">{editJobErrors.maxBacklogs}</p>}
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-semibold text-yellow-400 mb-1">Allowed Departments (Comma Separated)</label>
+                  <input 
+                    type="text" 
+                    value={editingJob.allowedDepartments} 
+                    onChange={(e) => setEditingJob({...editingJob, allowedDepartments: e.target.value})}
+                    placeholder="Computer Science, Information Technology, Electronics & Communication"
+                    className="w-full px-4 py-2 bg-gray-900 border border-gray-600 rounded-xl text-white text-sm outline-none focus:border-yellow-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-300 mb-1">Job Description & Responsibilities</label>
+                <textarea 
+                  required 
+                  rows="3" 
+                  value={editingJob.description} 
+                  onChange={(e) => {
+                    setEditingJob({...editingJob, description: e.target.value});
+                    if (editJobErrors.description) setEditJobErrors(prev => ({...prev, description: null}));
+                  }}
+                  className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-blue-500 ${editJobErrors.description ? 'border-red-500' : 'border-gray-600'}`}
+                ></textarea>
+                {editJobErrors.description && <p className="text-red-400 text-xs mt-1">{editJobErrors.description}</p>}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-300 mb-1">Required Tech Stack & Skills</label>
+                <input 
+                  type="text" 
+                  required 
+                  value={editingJob.requirements} 
+                  onChange={(e) => {
+                    setEditingJob({...editingJob, requirements: e.target.value});
+                    if (editJobErrors.requirements) setEditJobErrors(prev => ({...prev, requirements: null}));
+                  }}
+                  className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-blue-500 ${editJobErrors.requirements ? 'border-red-500' : 'border-gray-600'}`}
+                />
+                {editJobErrors.requirements && <p className="text-red-400 text-xs mt-1">{editJobErrors.requirements}</p>}
+              </div>
+
+              <div className="flex gap-3 pt-3 border-t border-gray-700">
+                <button 
+                  type="button" 
+                  onClick={() => { setShowEditJobModal(false); setEditingJob(null); }}
+                  className="flex-1 px-4 py-2.5 bg-gray-700 text-gray-200 rounded-xl text-sm font-semibold hover:bg-gray-600 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  disabled={isSavingJob}
+                  className="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold shadow-lg transition-colors disabled:opacity-50"
+                >
+                  {isSavingJob ? 'Saving Position...' : 'Save Position Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= IN-APP RESUME PDF PREVIEW MODAL ================= */}
+      {showResumeModal && previewResume.url && (
+        <div className="fixed inset-0 pt-16 bg-black/85 backdrop-blur-md flex items-center justify-center z-50 animate-fade-in p-4 overflow-y-auto">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            
+            {/* Modal Header */}
+            <div className="p-4 bg-gray-800/90 border-b border-gray-700 flex flex-wrap justify-between items-center gap-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-blue-900/40 text-blue-400 rounded-xl">
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white leading-tight">{previewResume.studentName}'s Resume</h3>
+                  {previewResume.positionTitle && (
+                    <p className="text-xs text-blue-400 font-medium">Position: {previewResume.positionTitle}</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => openResumeInNewTab(previewResume.url)}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1 shadow-md"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                  Open in New Tab
+                </button>
+                <a
+                  href={previewResume.url}
+                  download
+                  className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                  Download
+                </a>
+                <button
+                  onClick={() => { setShowResumeModal(false); setPreviewResume({ url: '', studentName: '', positionTitle: '' }); }}
+                  className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded-lg transition-colors ml-1"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* Document Viewer Frame */}
+            <div className="flex-1 p-2 bg-gray-950/60 overflow-hidden flex flex-col min-h-[500px]">
+              {isPdfResume(previewResume.url) || previewResume.url.includes('/view/') || previewResume.url.includes('/uploads/') ? (
+                <iframe
+                  src={previewResume.url}
+                  title="Candidate Resume Preview"
+                  className="w-full flex-1 rounded-xl border border-gray-800 bg-gray-900"
+                />
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
+                  <div className="p-4 bg-gray-800 rounded-2xl text-blue-400">
+                    <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                  </div>
+                  <div>
+                    <h4 className="text-lg font-bold text-white">External Resume Document</h4>
+                    <p className="text-gray-400 text-sm max-w-md mt-1">This resume is hosted on an external portfolio URL or document link.</p>
+                  </div>
+                  <a
+                    href={previewResume.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl shadow-lg transition-colors inline-flex items-center gap-2"
+                  >
+                    Open Resume Document &rarr;
+                  </a>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 bg-gray-800/80 border-t border-gray-700 flex justify-between items-center text-xs text-gray-400">
+              <span>Secure streaming endpoint active</span>
+              <button
+                onClick={() => { setShowResumeModal(false); setPreviewResume({ url: '', studentName: '', positionTitle: '' }); }}
+                className="px-4 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 font-semibold rounded-lg transition-colors"
+              >
+                Close Preview
+              </button>
+            </div>
+
           </div>
         </div>
       )}
