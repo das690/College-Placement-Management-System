@@ -120,7 +120,7 @@ Open a new terminal window:
 
 ```Bash
 cd frontend
-npm install
+npm installl
 ```
 Start the Vite development server:
 ```bash
