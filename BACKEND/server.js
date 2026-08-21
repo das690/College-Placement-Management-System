@@ -11,6 +11,7 @@ const jobRoutes = require('./routes/jobRoutes');
 const applicationRoutes = require('./routes/applicationRoutes');
 const driveRoutes = require('./routes/driveRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
+const communicationRoutes = require('./routes/communicationRoutes');
 
 dotenv.config();
 
@@ -58,6 +59,7 @@ app.use('/api/jobs', jobRoutes);
 app.use('/api/applications', applicationRoutes);
 app.use('/api/drives', driveRoutes);
 app.use('/api/upload', uploadRoutes);
+app.use('/api/communications', communicationRoutes);
 
 // Comprehensive Error Handler
 app.use((err, req, res, next) => {

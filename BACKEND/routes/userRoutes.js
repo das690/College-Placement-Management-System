@@ -30,7 +30,7 @@ router.post('/register', async (req, res) => {
     if (role === 'admin') {
       const validAdminCode = process.env.ADMIN_SECRET || 'GUVI-ADMIN';
       if (adminCode !== validAdminCode) {
-        return res.status(403).json({ message: 'Invalid Admin Passcode' });
+        return res.status(403).json({ message: 'Invalid Admin Passcode. Please enter the correct secret key.' });
       }
     }
 
@@ -86,6 +86,10 @@ router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email address and password are required.' });
+    }
+
     // Check for user email
     const user = await User.findOne({ email });
 
@@ -117,6 +121,19 @@ router.get('/me', protect, async (req, res) => {
   } catch (error) {
     console.error('GET /api/users/me error:', error.message);
     res.status(500).json({ message: 'Failed to fetch your profile. Please try again.' });
+  }
+});
+
+// @desc    Get all students (for Admin / Department reports)
+// @route   GET /api/users/students
+// @access  Private (Admins & Companies)
+router.get('/students', protect, async (req, res) => {
+  try {
+    const students = await User.find({ role: 'student' }).select('-password').sort({ createdAt: -1 });
+    res.status(200).json(students);
+  } catch (error) {
+    console.error('GET /api/users/students error:', error.message);
+    res.status(500).json({ message: 'Failed to fetch students list.' });
   }
 });
 
@@ -174,6 +191,107 @@ router.put('/profile', protect, async (req, res) => {
   } catch (error) {
     console.error('PUT /api/users/profile error:', error.message);
     res.status(500).json({ message: 'Failed to update your academic profile. Please try again.' });
+  }
+});
+
+// @desc    Bulk Import Students from CSV data
+// @route   POST /api/users/import-students
+// @access  Private (Admin only)
+router.post('/import-students', protect, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Only administrators are authorized to perform bulk student imports.' });
+    }
+
+    const { students } = req.body;
+    if (!students || !Array.isArray(students) || students.length === 0) {
+      return res.status(400).json({ message: 'No student records provided in import payload.' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const defaultHashedPassword = await bcrypt.hash('Student@2026', salt);
+
+    let importedCount = 0;
+    let duplicateCount = 0;
+    const skippedRecords = [];
+    const importedRecords = [];
+
+    for (const record of students) {
+      const email = record.email ? String(record.email).trim().toLowerCase() : '';
+      const name = record.name ? String(record.name).trim() : '';
+
+      if (!email || !name) {
+        skippedRecords.push({ email, name, reason: 'Missing name or email' });
+        continue;
+      }
+
+      // Check if user already exists
+      const existingUser = await User.findOne({ email });
+      if (existingUser) {
+        duplicateCount++;
+        skippedRecords.push({ email, name, reason: 'Email already exists in system' });
+        continue;
+      }
+
+      // Format skills
+      let skillsArray = [];
+      if (record.skills) {
+        skillsArray = Array.isArray(record.skills)
+          ? record.skills
+          : String(record.skills).split(',').map(s => s.trim()).filter(Boolean);
+      }
+
+      const cgpa = (record.cgpa !== undefined && record.cgpa !== '' && !isNaN(record.cgpa)) 
+        ? Math.max(0, Math.min(10, Number(record.cgpa))) 
+        : null;
+
+      const graduationYear = (record.graduationYear && !isNaN(record.graduationYear))
+        ? Number(record.graduationYear)
+        : 2026;
+
+      const activeBacklogs = (record.activeBacklogs !== undefined && record.activeBacklogs !== '' && !isNaN(record.activeBacklogs))
+        ? Math.max(0, parseInt(record.activeBacklogs, 10))
+        : 0;
+
+      const customPassword = record.password ? await bcrypt.hash(String(record.password), salt) : defaultHashedPassword;
+
+      const newUser = await User.create({
+        name,
+        email,
+        password: customPassword,
+        role: 'student',
+        academicDetails: {
+          department: record.department ? String(record.department).trim() : '',
+          graduationYear,
+          cgpa,
+          activeBacklogs,
+          skills: skillsArray,
+          certifications: [],
+          resumeUrl: record.resumeUrl ? String(record.resumeUrl).trim() : ''
+        }
+      });
+
+      importedCount++;
+      importedRecords.push({
+        _id: newUser._id,
+        name: newUser.name,
+        email: newUser.email,
+        department: newUser.academicDetails.department,
+        cgpa: newUser.academicDetails.cgpa
+      });
+    }
+
+    res.status(200).json({
+      message: `Bulk import completed! ${importedCount} student(s) imported successfully, ${duplicateCount} skipped.`,
+      importedCount,
+      duplicateCount,
+      totalProcessed: students.length,
+      skippedRecords,
+      importedRecords
+    });
+  } catch (error) {
+    console.error('POST /api/users/import-students error:', error);
+    res.status(500).json({ message: 'Failed to complete student import: ' + error.message });
   }
 });
 

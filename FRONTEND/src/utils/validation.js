@@ -103,7 +103,7 @@ export const validateStudentProfile = (profile) => {
   const errors = {};
 
   if (!profile.department || profile.department.trim() === '') {
-    errors.department = 'Department is required.';
+    errors.department = 'Department selection is required.';
   }
 
   if (profile.cgpa === undefined || profile.cgpa === null || String(profile.cgpa).trim() === '') {
@@ -132,7 +132,7 @@ export const validateStudentProfile = (profile) => {
   }
 
   if (!profile.resumeUrl || String(profile.resumeUrl).trim() === '') {
-    errors.resumeUrl = 'A PDF resume or resume link is required.';
+    errors.resumeUrl = 'A PDF resume file is required.';
   }
 
   return {
@@ -157,6 +157,44 @@ export const validateInterview = (interview) => {
 
   if (!interview.stage) {
     errors.stage = 'Recruitment stage is required.';
+  }
+
+  return {
+    isValid: Object.keys(errors).length === 0,
+    errors
+  };
+};
+
+export const validateCommunication = (comm) => {
+  const errors = {};
+
+  if (!comm.title || comm.title.trim().length < 3) {
+    errors.title = 'Announcement Title is required (minimum 3 characters).';
+  }
+
+  if (!comm.message || comm.message.trim().length < 10) {
+    errors.message = 'Detailed message content is required (minimum 10 characters).';
+  }
+
+  if (!comm.targetAudience) {
+    errors.targetAudience = 'Please specify the target recipient audience.';
+  }
+
+  return {
+    isValid: Object.keys(errors).length === 0,
+    errors
+  };
+};
+
+export const validateRoundEvaluation = (round) => {
+  const errors = {};
+
+  if (!round.roundName || round.roundName.trim().length < 2) {
+    errors.roundName = 'Round Name is required (e.g. Technical Round 1).';
+  }
+
+  if (!round.status) {
+    errors.status = 'Round status / decision is required.';
   }
 
   return {

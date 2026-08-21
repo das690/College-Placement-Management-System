@@ -4,8 +4,20 @@ import { useNavigate, useParams } from 'react-router-dom';
 import API from '../utils/api';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { toast } from 'react-hot-toast';
-import { getResumeUrl, openResumeInNewTab, isPdfResume } from '../utils/resumeHelper';
+
+// Utilities
+import { getResumeUrl, openResumeInNewTab } from '../utils/resumeHelper';
 import { validateDrive, validateJob, validateStudentProfile, validateInterview } from '../utils/validation';
+import { COLLEGE_DEPARTMENTS, DEPARTMENT_OPTIONS, isDepartmentEligible } from '../utils/departments';
+import { exportDriveReportCSV, exportApplicantsCSV } from '../utils/exportHelper';
+
+// Modular Components
+import DepartmentAnalytics from '../components/DepartmentAnalytics';
+import CommunicationCenter from '../components/CommunicationCenter';
+import BulkImportModal from '../components/BulkImportModal';
+import RoundEvaluationModal from '../components/RoundEvaluationModal';
+import RoundTimelineCard from '../components/RoundTimelineCard';
+import ResumePreviewModal from '../components/ResumePreviewModal';
 
 const RECRUITMENT_STAGES = [
   'Applied',
@@ -17,53 +29,6 @@ const RECRUITMENT_STAGES = [
   'Rejected',
   'Terminated',
   'Withdrawn'
-];
-
-const exportDriveReportCSV = (drives, jobs, apps, selectedDriveId) => {
-  const targetDrive = selectedDriveId === 'ALL' ? null : drives.find(d => d._id === selectedDriveId);
-  const driveName = targetDrive ? targetDrive.name : 'All_Placement_Drives';
-  
-  let filteredApps = apps;
-  if (selectedDriveId !== 'ALL') {
-    filteredApps = apps.filter(app => {
-      const driveId = typeof app.drive === 'object' ? app.drive?._id : (app.drive || app.job?.drive?._id || app.job?.drive);
-      return driveId === selectedDriveId;
-    });
-  }
-
-  const headers = ['Drive Name', 'Position Title', 'Company', 'Student Name', 'Department', 'CGPA', 'Recruitment Status', 'Interview Date', 'Interview Link', 'Resume URL'];
-  const rows = filteredApps.map(app => [
-    `"${(app.drive?.name || app.job?.drive?.name || 'Campus Drive').replace(/"/g, '""')}"`,
-    `"${(app.job?.title || 'N/A').replace(/"/g, '""')}"`,
-    `"${(app.job?.company?.name || 'N/A').replace(/"/g, '""')}"`,
-    `"${(app.student?.name || 'Candidate').replace(/"/g, '""')}"`,
-    `"${(app.student?.academicDetails?.department || 'N/A').replace(/"/g, '""')}"`,
-    app.student?.academicDetails?.cgpa || 'N/A',
-    `"${app.status || 'Applied'}"`,
-    `"${app.interviewDate || 'N/A'}"`,
-    `"${app.interviewLink || 'N/A'}"`,
-    `"${getResumeUrl(app.resumeUrl) || 'N/A'}"`
-  ]);
-
-  const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
-  const encodedUri = encodeURI(csvContent);
-  const link = document.createElement('a');
-  link.setAttribute('href', encodedUri);
-  link.setAttribute('download', `${driveName.replace(/\s+/g, '_')}_Placement_Report.csv`);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  toast.success(`Downloaded CSV Placement Report for ${targetDrive ? targetDrive.name : 'All Drives'}`);
-};
-
-const DEPARTMENTS = [
-  'Computer Science',
-  'Information Technology',
-  'Electronics & Communication',
-  'Electrical & Electronics',
-  'Mechanical Engineering',
-  'Civil Engineering',
-  'Data Science & AI'
 ];
 
 const getMissingAcademicFields = (u) => {
@@ -92,7 +57,7 @@ const Dashboard = () => {
   // Drive Filter State for Reports & Analytics
   const [selectedDriveFilter, setSelectedDriveFilter] = useState('ALL');
 
-  // Search & Filter State
+  // Search State
   const [searchTerm, setSearchTerm] = useState('');
 
   // Drive Creation State (Admin)
@@ -122,7 +87,7 @@ const Dashboard = () => {
     drive: '', 
     minCgpa: 0, 
     maxBacklogs: 0, 
-    allowedDepartments: '',
+    allowedDepartments: [], // array of department codes / names
     targetGraduationYear: 2026
   });
   const [jobErrors, setJobErrors] = useState({});
@@ -175,6 +140,13 @@ const Dashboard = () => {
   const [quickResumeFile, setQuickResumeFile] = useState(null);
   const [quickProfileErrors, setQuickProfileErrors] = useState({});
   const [isQuickSaving, setIsQuickSaving] = useState(false);
+
+  // Round Evaluation Modal State
+  const [showRoundModal, setShowRoundModal] = useState(false);
+  const [selectedAppForRound, setSelectedAppForRound] = useState(null);
+
+  // Bulk Student Import Modal State (Admin)
+  const [showBulkImportModal, setShowBulkImportModal] = useState(false);
 
   // Sync Student Profile on User Load
   useEffect(() => {
@@ -269,12 +241,10 @@ const Dashboard = () => {
       reasons.push(`Maximum backlogs allowed: ${maxBacklogs} (Yours: ${details.activeBacklogs})`);
     }
 
-    // 3. Department Check
+    // 3. Department Check (Smart Alias Normalization)
     if (allowedDepartments && allowedDepartments.length > 0 && details.department) {
-      const match = allowedDepartments.some(dept => 
-        dept.toLowerCase().trim() === (details.department || '').toLowerCase().trim()
-      );
-      if (!match) {
+      const isEligibleDept = isDepartmentEligible(details.department, allowedDepartments);
+      if (!isEligibleDept) {
         reasons.push(`Allowed departments: ${allowedDepartments.join(', ')} (Yours: ${details.department})`);
       }
     }
@@ -298,7 +268,6 @@ const Dashboard = () => {
       const formData = new FormData();
       formData.append('resume', file);
       
-      // Post FormData without manual header to let Axios set correct boundary
       const res = await API.post('/upload', formData);
       const uploadedUrl = res.data.resumeUrl;
 
@@ -320,7 +289,7 @@ const Dashboard = () => {
       if (setUser) setUser(updatedUser);
       localStorage.setItem('user', JSON.stringify(updatedUser));
 
-      toast.success("Resume PDF uploaded & saved to academic profile!");
+      toast.success("Resume PDF uploaded to Cloudinary & saved to profile!");
       setProfileResumeFile(null);
       fetchData();
       return uploadedUrl;
@@ -429,9 +398,9 @@ const Dashboard = () => {
         minCgpa: Number(newJob.minCgpa || 0),
         maxBacklogs: Number(newJob.maxBacklogs || 0),
         targetGraduationYear: Number(newJob.targetGraduationYear || 2026),
-        allowedDepartments: typeof newJob.allowedDepartments === 'string' 
-          ? newJob.allowedDepartments.split(',').map(d => d.trim()).filter(Boolean)
-          : newJob.allowedDepartments
+        allowedDepartments: Array.isArray(newJob.allowedDepartments) 
+          ? newJob.allowedDepartments 
+          : String(newJob.allowedDepartments).split(',').map(d => d.trim()).filter(Boolean)
       }
     };
 
@@ -442,7 +411,7 @@ const Dashboard = () => {
       navigate('/dashboard/jobs');
       setNewJob({
         title: '', description: '', requirements: '', location: '', salary: '', 
-        drive: '', minCgpa: 0, maxBacklogs: 0, allowedDepartments: '', targetGraduationYear: 2026
+        drive: '', minCgpa: 0, maxBacklogs: 0, allowedDepartments: [], targetGraduationYear: 2026
       });
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to post position');
@@ -450,10 +419,7 @@ const Dashboard = () => {
   };
 
   const handleOpenEditJob = (job) => {
-    const driveId = typeof job.drive === 'object' ? job.drive?._id : job.drive;
-    const allowedDepts = job.eligibility?.allowedDepartments;
-    const deptsString = Array.isArray(allowedDepts) ? allowedDepts.join(', ') : (allowedDepts || '');
-
+    const rawAllowed = job.eligibility?.allowedDepartments || [];
     setEditingJob({
       _id: job._id,
       title: job.title || '',
@@ -461,10 +427,10 @@ const Dashboard = () => {
       requirements: job.requirements || '',
       location: job.location || '',
       salary: job.salary || '',
-      drive: driveId || '',
+      drive: (typeof job.drive === 'object' ? job.drive?._id : job.drive) || '',
       minCgpa: job.eligibility?.minCgpa !== undefined ? job.eligibility.minCgpa : 0,
       maxBacklogs: job.eligibility?.maxBacklogs !== undefined ? job.eligibility.maxBacklogs : 0,
-      allowedDepartments: deptsString,
+      allowedDepartments: Array.isArray(rawAllowed) ? rawAllowed : String(rawAllowed).split(',').map(d => d.trim()).filter(Boolean),
       targetGraduationYear: job.eligibility?.targetGraduationYear || 2026
     });
     setEditJobErrors({});
@@ -483,80 +449,72 @@ const Dashboard = () => {
     }
     setEditJobErrors({});
 
-    const payload = {
-      title: editingJob.title,
-      description: editingJob.description,
-      requirements: editingJob.requirements,
-      location: editingJob.location,
-      salary: editingJob.salary,
-      drive: editingJob.drive,
-      eligibility: {
-        minCgpa: Number(editingJob.minCgpa || 0),
-        maxBacklogs: Number(editingJob.maxBacklogs || 0),
-        targetGraduationYear: Number(editingJob.targetGraduationYear || 2026),
-        allowedDepartments: typeof editingJob.allowedDepartments === 'string'
-          ? editingJob.allowedDepartments.split(',').map(d => d.trim()).filter(Boolean)
-          : editingJob.allowedDepartments
-      }
-    };
-
     setIsSavingJob(true);
     try {
+      const payload = {
+        title: editingJob.title,
+        description: editingJob.description,
+        requirements: editingJob.requirements,
+        location: editingJob.location,
+        salary: editingJob.salary,
+        drive: editingJob.drive,
+        eligibility: {
+          minCgpa: Number(editingJob.minCgpa || 0),
+          maxBacklogs: Number(editingJob.maxBacklogs || 0),
+          allowedDepartments: editingJob.allowedDepartments,
+          targetGraduationYear: Number(editingJob.targetGraduationYear || 2026)
+        }
+      };
+
       const res = await API.put(`/jobs/${editingJob._id}`, payload);
       setJobs(jobs.map(j => j._id === editingJob._id ? res.data : j));
-      toast.success('Position updated successfully!');
+      toast.success('Job position updated successfully!');
       setShowEditJobModal(false);
       setEditingJob(null);
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to update position');
+      toast.error(error.response?.data?.message || 'Failed to update job position');
     } finally {
       setIsSavingJob(false);
     }
   };
 
   const handleDeleteJob = async (jobId) => {
-    if (!window.confirm("Delete this position?")) return;
+    if (!window.confirm("Remove this job position? Existing submitted applications will remain intact.")) return;
     try {
       await API.delete(`/jobs/${jobId}`);
-      setJobs(jobs.filter(job => job._id !== jobId));
-      toast.success("Job position removed");
+      setJobs(jobs.filter(j => j._id !== jobId));
+      toast.success("Position successfully removed");
     } catch (error) {
-      toast.error(error.response?.data?.message || "Failed to delete job");
+      toast.error(error.response?.data?.message || "Failed to remove position");
     }
   };
 
-  const handlePreviewResume = (url, studentName = 'Candidate', positionTitle = '') => {
-    const resolvedUrl = getResumeUrl(url);
-    if (!resolvedUrl) {
-      return toast.error("No valid resume document URL available to preview.");
-    }
-    setPreviewResume({
-      url: resolvedUrl,
-      studentName,
-      positionTitle
-    });
-    setShowResumeModal(true);
-  };
-
-  const handleStatusChange = async (appId, newStatus) => {
-    if (newStatus === 'Technical Interview' || newStatus === 'HR Interview') {
-      setSelectedAppForInterview(appId);
-      setInterviewDetails(prev => ({ ...prev, stage: newStatus }));
-      setInterviewErrors({});
-      setShowInterviewModal(true);
-      return; 
-    }
+  const handleUpdateAppStatus = async (appId, newStatus) => {
     try {
       const res = await API.put(`/applications/${appId}/status`, { status: newStatus });
-      setApplications(applications.map(app => app._id === appId ? (res.data || { ...app, status: newStatus }) : app));
-      toast.success(`Application updated to stage: ${newStatus}`);
+      setApplications(applications.map(app => app._id === appId ? res.data : app));
+      toast.success(`Application status updated to "${newStatus}"`);
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to update stage');
+      toast.error(error.response?.data?.message || "Failed to update application status");
     }
   };
 
-  const handleScheduleInterview = async (e) => {
+  const handleOpenInterviewModal = (app) => {
+    setSelectedAppForInterview(app);
+    setInterviewDetails({
+      date: app.interviewDate || '',
+      time: app.interviewTime || '',
+      link: app.interviewLink || '',
+      stage: (app.status === 'Applied' || app.status === 'Reviewed' || app.status === 'Shortlisted') ? 'Technical Interview' : app.status
+    });
+    setInterviewErrors({});
+    setShowInterviewModal(true);
+  };
+
+  const handleSaveInterviewSchedule = async (e) => {
     e.preventDefault();
+    if (!selectedAppForInterview) return;
+
     const validation = validateInterview(interviewDetails);
     if (!validation.isValid) {
       setInterviewErrors(validation.errors);
@@ -566,34 +524,21 @@ const Dashboard = () => {
     setInterviewErrors({});
 
     try {
-      const res = await API.put(`/applications/${selectedAppForInterview}/status`, { 
+      const res = await API.put(`/applications/${selectedAppForInterview._id}/status`, {
         status: interviewDetails.stage,
         interviewDate: interviewDetails.date,
         interviewTime: interviewDetails.time,
-        interviewLink: interviewDetails.link
+        interviewLink: interviewDetails.link || ''
       });
-      setApplications(applications.map(app => app._id === selectedAppForInterview ? res.data : app));
-      toast.success(`Interview scheduled for candidate! Stage: ${interviewDetails.stage}`);
+      setApplications(applications.map(app => app._id === selectedAppForInterview._id ? res.data : app));
+      toast.success("Interview scheduled and candidate notified!");
       setShowInterviewModal(false);
       setSelectedAppForInterview(null);
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to schedule interview');
+      toast.error(error.response?.data?.message || "Failed to schedule interview");
     }
   };
 
-  const handleDeleteApplication = async (appId) => {
-    if (!window.confirm("Terminate this application record? The status will update to Terminated and be retained in placement drive analytics.")) return;
-    try {
-      const res = await API.delete(`/applications/${appId}`);
-      const updatedApp = res.data?.application;
-      setApplications(applications.map(app => app._id === appId ? (updatedApp || { ...app, status: 'Terminated' }) : app));
-      toast.success("Application marked as Terminated. Historical submission preserved in drive analytics!");
-    } catch (error) {
-      toast.error(error.response?.data?.message || "Failed to terminate application");
-    }
-  };
-
-  // ================= STUDENT HANDLERS =================
   const handleSaveProfile = async (e) => {
     e.preventDefault();
     const validation = validateStudentProfile(studentProfile);
@@ -679,7 +624,7 @@ const Dashboard = () => {
   };
 
   const handleWithdrawApplication = async (appId) => {
-    if (!window.confirm("Withdraw your application from this drive position? The status will update to Withdrawn and be retained in your history.")) return;
+    if (!window.confirm("Withdraw your application from this position? The status will update to Withdrawn and be retained in your history.")) return;
     try {
       const res = await API.delete(`/applications/${appId}`);
       const updatedApp = res.data?.application;
@@ -786,13 +731,12 @@ const Dashboard = () => {
 
   // Analytics Computation
   const selectedCount = filteredAppsByDrive.filter(app => app.status === 'Selected' || app.status === 'Hired').length;
-  const terminatedCount = filteredAppsByDrive.filter(app => app.status === 'Terminated' || app.status === 'Withdrawn').length;
   const activeCount = filteredAppsByDrive.filter(app => app.status !== 'Terminated' && app.status !== 'Withdrawn').length;
   const placementPercentage = activeCount > 0 
     ? Math.round((selectedCount / activeCount) * 100) 
     : (filteredAppsByDrive.length > 0 ? Math.round((selectedCount / filteredAppsByDrive.length) * 100) : 0);
 
-  // Department-wise Stats
+  // Department-wise Stats for Overview charts
   const deptStats = useMemo(() => {
     const deptMap = {};
     filteredAppsByDrive.forEach(app => {
@@ -807,34 +751,6 @@ const Dashboard = () => {
     });
     return Object.values(deptMap);
   }, [filteredAppsByDrive]);
-
-  // Organization-wise Hiring Stats
-  const orgStats = useMemo(() => {
-    const orgMap = {};
-
-    filteredJobsByDrive.forEach(job => {
-      const compName = job.company?.name || 'Organization';
-      const compId = job.company?._id || compName;
-      if (!orgMap[compId]) {
-        orgMap[compId] = { name: compName, positions: 0, applications: 0, selected: 0 };
-      }
-      orgMap[compId].positions += 1;
-    });
-
-    filteredAppsByDrive.forEach(app => {
-      const compName = app.job?.company?.name || 'Organization';
-      const compId = app.job?.company?._id || compName;
-      if (!orgMap[compId]) {
-        orgMap[compId] = { name: compName, positions: 0, applications: 0, selected: 0 };
-      }
-      orgMap[compId].applications += 1;
-      if (app.status === 'Selected' || app.status === 'Hired') {
-        orgMap[compId].selected += 1;
-      }
-    });
-
-    return Object.values(orgMap);
-  }, [filteredJobsByDrive, filteredAppsByDrive]);
 
   // Helper to get participating organizations for a drive
   const getParticipatingCompaniesForDrive = (driveId) => {
@@ -860,6 +776,30 @@ const Dashboard = () => {
     (job.location || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  // Department Pill Toggle Handler for Job Creation
+  const handleToggleDepartmentInNewJob = (deptName) => {
+    setNewJob(prev => {
+      const current = Array.isArray(prev.allowedDepartments) ? prev.allowedDepartments : [];
+      if (current.includes(deptName)) {
+        return { ...prev, allowedDepartments: current.filter(d => d !== deptName) };
+      } else {
+        return { ...prev, allowedDepartments: [...current, deptName] };
+      }
+    });
+  };
+
+  // Department Pill Toggle Handler for Job Editing
+  const handleToggleDepartmentInEditJob = (deptName) => {
+    setEditingJob(prev => {
+      const current = Array.isArray(prev.allowedDepartments) ? prev.allowedDepartments : [];
+      if (current.includes(deptName)) {
+        return { ...prev, allowedDepartments: current.filter(d => d !== deptName) };
+      } else {
+        return { ...prev, allowedDepartments: [...current, deptName] };
+      }
+    });
+  };
+
   if (loading) return <div className="text-center mt-20 text-gray-400 font-medium text-lg">Loading Placement Portal...</div>;
 
   return (
@@ -873,33 +813,60 @@ const Dashboard = () => {
           </div>
           <div>
             <h2 className="text-xl font-bold text-white tracking-tight">College Placement System</h2>
-            <p className="text-xs text-gray-400">Workflow: Placement Drive &rarr; Organization &rarr; Position &rarr; Application</p>
+            <p className="text-xs text-gray-400">Workflow: Placement Drive &rarr; Organization &rarr; Position &rarr; Multi-Round Evaluation</p>
           </div>
         </div>
 
-        {/* Global Placement Drive Filter */}
-        <div className="flex items-center gap-3">
-          <label className="text-xs font-semibold uppercase text-gray-400 whitespace-nowrap">Filter Drive:</label>
-          <select 
-            value={selectedDriveFilter} 
-            onChange={(e) => setSelectedDriveFilter(e.target.value)}
-            className="px-4 py-2 bg-gray-900 border border-blue-500/40 rounded-xl text-white text-sm outline-none focus:border-blue-500"
-          >
-            <option value="ALL">🌐 All Placement Drives ({drives.length})</option>
-            {drives.map(d => (
-              <option key={d._id} value={d._id}>🎯 {d.name} ({d.academicYear || 'Active'})</option>
-            ))}
-          </select>
+        {/* Global Drive Filter & Bulk Import (Admin) */}
+        <div className="flex flex-wrap items-center gap-3">
+          {user.role === 'admin' && (
+            <button
+              onClick={() => setShowBulkImportModal(true)}
+              className="px-3.5 py-2 bg-blue-700 hover:bg-blue-600 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5"
+            >
+              <span>📥 Bulk Import Students (CSV)</span>
+            </button>
+          )}
+
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-semibold uppercase text-gray-400 whitespace-nowrap">Filter Drive:</label>
+            <select 
+              value={selectedDriveFilter} 
+              onChange={(e) => setSelectedDriveFilter(e.target.value)}
+              className="px-3 py-2 bg-gray-900 border border-blue-500/40 rounded-xl text-white text-xs outline-none focus:border-blue-500"
+            >
+              <option value="ALL">🌐 All Placement Drives ({drives.length})</option>
+              {drives.map(d => (
+                <option key={d._id} value={d._id}>🎯 {d.name} ({d.academicYear || 'Active'})</option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
-      {/* NAVIGATION BUTTONS */}
+      {/* NAVIGATION TABS */}
       <div className="flex flex-wrap gap-2 border-b border-gray-800 pb-3">
         <button 
           onClick={() => navigate('/dashboard')} 
           className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${currentView === 'overview' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-800 text-gray-400 hover:text-white'}`}
         >
           📊 Overview
+        </button>
+
+        {/* Dedicated Department Placements Tab (Available to All Roles) */}
+        <button 
+          onClick={() => navigate('/dashboard/departments')} 
+          className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${currentView === 'departments' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-800 text-gray-400 hover:text-white'}`}
+        >
+          🏛️ Department Placements
+        </button>
+
+        {/* Dedicated Communication Hub Tab (Available to All Roles) */}
+        <button 
+          onClick={() => navigate('/dashboard/communication')} 
+          className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${currentView === 'communication' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-800 text-gray-400 hover:text-white'}`}
+        >
+          📢 Communication Hub
         </button>
 
         {user.role === 'admin' && (
@@ -926,7 +893,7 @@ const Dashboard = () => {
               onClick={() => navigate('/dashboard/analytics')} 
               className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${currentView === 'analytics' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-800 text-gray-400 hover:text-white'}`}
             >
-              📈 Placement Analytics
+              📈 Analytics
             </button>
           </>
         )}
@@ -985,13 +952,36 @@ const Dashboard = () => {
       </div>
 
       {/* ========================================================= */}
+      {/*              DEPARTMENT PLACEMENTS VIEW                   */}
+      {/* ========================================================= */}
+      {currentView === 'departments' && (
+        <DepartmentAnalytics 
+          applications={applications} 
+          jobs={jobs} 
+          drives={drives} 
+          selectedDriveId={selectedDriveFilter} 
+        />
+      )}
+
+      {/* ========================================================= */}
+      {/*                COMMUNICATION HUB VIEW                     */}
+      {/* ========================================================= */}
+      {currentView === 'communication' && (
+        <CommunicationCenter 
+          user={user} 
+          jobs={jobs} 
+          drives={drives} 
+        />
+      )}
+
+      {/* ========================================================= */}
       {/*                       STUDENT VIEWS                       */}
       {/* ========================================================= */}
-      {user.role === 'student' && (
+      {user.role === 'student' && currentView !== 'departments' && currentView !== 'communication' && (
         <div className="space-y-8">
           
           {/* PROFILE INCOMPLETE WARNING BANNER */}
-          {user.role === 'student' && getMissingAcademicFields(user).length > 0 && (
+          {getMissingAcademicFields(user).length > 0 && (
             <div className="bg-gradient-to-r from-yellow-950/80 to-red-950/50 border border-yellow-600/60 p-6 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-xl">
               <div className="flex items-start gap-4">
                 <div className="p-3 bg-yellow-900/40 rounded-xl text-yellow-400 shrink-0 mt-1 md:mt-0">
@@ -1024,19 +1014,19 @@ const Dashboard = () => {
             <div className="space-y-8 animate-fade-in">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                 <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg flex items-center gap-4">
-                  <div className="p-4 rounded-xl bg-blue-900/30 text-blue-400"><svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg></div>
+                  <div className="p-4 rounded-xl bg-blue-900/30 text-blue-400 text-2xl">🏛️</div>
                   <div><p className="text-gray-400 text-xs uppercase font-semibold">Active Drives</p><h3 className="text-3xl font-bold text-white">{drives.length}</h3></div>
                 </div>
                 <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg flex items-center gap-4">
-                  <div className="p-4 rounded-xl bg-purple-900/30 text-purple-400"><svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg></div>
+                  <div className="p-4 rounded-xl bg-purple-900/30 text-purple-400 text-2xl">📋</div>
                   <div><p className="text-gray-400 text-xs uppercase font-semibold">My Applications</p><h3 className="text-3xl font-bold text-white">{applications.length}</h3></div>
                 </div>
                 <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg flex items-center gap-4">
-                  <div className="p-4 rounded-xl bg-green-900/30 text-green-400"><svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg></div>
+                  <div className="p-4 rounded-xl bg-green-900/30 text-green-400 text-2xl">🎉</div>
                   <div><p className="text-gray-400 text-xs uppercase font-semibold">Offers Received</p><h3 className="text-3xl font-bold text-white">{selectedCount}</h3></div>
                 </div>
                 <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg flex items-center gap-4">
-                  <div className="p-4 rounded-xl bg-cyan-900/30 text-cyan-400"><svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg></div>
+                  <div className="p-4 rounded-xl bg-cyan-900/30 text-cyan-400 text-2xl">⭐</div>
                   <div><p className="text-gray-400 text-xs uppercase font-semibold">Your CGPA</p><h3 className="text-3xl font-bold text-white">{user.academicDetails?.cgpa || 'N/A'}</h3></div>
                 </div>
               </div>
@@ -1048,12 +1038,12 @@ const Dashboard = () => {
                   <p className="text-gray-400 text-sm mt-2">Browse open positions and verify your eligibility criteria in real time.</p>
                 </button>
                 <button onClick={() => navigate('/dashboard/applications')} className="bg-gray-800 p-6 rounded-2xl border border-gray-700 hover:border-purple-500 text-left transition-all group shadow-lg">
-                  <h3 className="text-xl font-bold text-white group-hover:text-purple-400 transition-colors">Track Applications &rarr;</h3>
-                  <p className="text-gray-400 text-sm mt-2">View status of your applications through shortlisting, interviews, and offers.</p>
+                  <h3 className="text-xl font-bold text-white group-hover:text-purple-400 transition-colors">Track Applications & Rounds &rarr;</h3>
+                  <p className="text-gray-400 text-sm mt-2">View step-by-step round feedback, scores, interview invites, and offers.</p>
                 </button>
                 <button onClick={() => navigate('/dashboard/profile')} className="bg-gray-800 p-6 rounded-2xl border border-gray-700 hover:border-green-500 text-left transition-all group shadow-lg">
-                  <h3 className="text-xl font-bold text-white group-hover:text-green-400 transition-colors">Update Profile &rarr;</h3>
-                  <p className="text-gray-400 text-sm mt-2">Keep your CGPA, department, skills, and resume updated for placement drives.</p>
+                  <h3 className="text-xl font-bold text-white group-hover:text-green-400 transition-colors">Update Academic Profile &rarr;</h3>
+                  <p className="text-gray-400 text-sm mt-2">Keep your department, CGPA, skills, and Cloudinary PDF resume updated.</p>
                 </button>
               </div>
             </div>
@@ -1098,21 +1088,26 @@ const Dashboard = () => {
 
               <form onSubmit={handleSaveProfile} className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {/* Standardized Department Dropdown */}
                   <div>
                     <label className="block text-sm font-semibold text-gray-300 mb-1.5 flex items-center justify-between">
-                      <span>Department / Program</span>
+                      <span>Department / College Program</span>
                       {!studentProfile.department && <span className="text-xs text-red-400 font-bold">✕ Missing</span>}
                     </label>
                     <select 
                       required 
                       value={studentProfile.department} 
                       onChange={(e) => setStudentProfile({...studentProfile, department: e.target.value})}
-                      className="w-full px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500"
+                      className="w-full px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500 text-sm"
                     >
-                      <option value="">-- Select Department --</option>
-                      {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+                      <option value="">-- Select Standard Department --</option>
+                      {DEPARTMENT_OPTIONS.map(d => (
+                        <option key={d.code} value={d.value}>{d.icon} {d.label}</option>
+                      ))}
                     </select>
+                    {profileErrors.department && <p className="text-xs text-red-400 mt-1">{profileErrors.department}</p>}
                   </div>
+
                   <div>
                     <label className="block text-sm font-semibold text-gray-300 mb-1.5 flex items-center justify-between">
                       <span>Graduation Year</span>
@@ -1123,12 +1118,13 @@ const Dashboard = () => {
                       required 
                       value={studentProfile.graduationYear} 
                       onChange={(e) => setStudentProfile({...studentProfile, graduationYear: e.target.value})}
-                      className="w-full px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500" 
+                      className="w-full px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500 text-sm" 
                     />
                   </div>
+
                   <div>
                     <label className="block text-sm font-semibold text-gray-300 mb-1.5 flex items-center justify-between">
-                      <span>Cumulative CGPA</span>
+                      <span>Cumulative CGPA (0.0 - 10.0)</span>
                       {(studentProfile.cgpa === '' || studentProfile.cgpa === undefined) && <span className="text-xs text-red-400 font-bold">✕ Missing</span>}
                     </label>
                     <input 
@@ -1139,18 +1135,19 @@ const Dashboard = () => {
                       required 
                       value={studentProfile.cgpa} 
                       onChange={(e) => setStudentProfile({...studentProfile, cgpa: e.target.value})}
-                      className="w-full px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500" 
+                      className="w-full px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500 text-sm" 
                     />
                   </div>
+
                   <div>
-                    <label className="block text-sm font-semibold text-gray-300 mb-1.5">Active Backlogs</label>
+                    <label className="block text-sm font-semibold text-gray-300 mb-1.5">Active Backlogs Count</label>
                     <input 
                       type="number" 
-                      min="0"
+                      min="0" 
                       required 
                       value={studentProfile.activeBacklogs} 
                       onChange={(e) => setStudentProfile({...studentProfile, activeBacklogs: e.target.value})}
-                      className="w-full px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500" 
+                      className="w-full px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500 text-sm" 
                     />
                   </div>
                 </div>
@@ -1163,7 +1160,7 @@ const Dashboard = () => {
                       placeholder="e.g. React, Node.js, Python, Java, SQL"
                       value={studentProfile.skills} 
                       onChange={(e) => setStudentProfile({...studentProfile, skills: e.target.value})}
-                      className="w-full px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500" 
+                      className="w-full px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500 text-sm" 
                     />
                   </div>
                   <div>
@@ -1173,21 +1170,32 @@ const Dashboard = () => {
                       placeholder="e.g. AWS Certified Cloud Practitioner, NPTEL Algorithms"
                       value={studentProfile.certifications} 
                       onChange={(e) => setStudentProfile({...studentProfile, certifications: e.target.value})}
-                      className="w-full px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500" 
+                      className="w-full px-4 py-2.5 bg-gray-900/60 border border-gray-600 rounded-xl text-white outline-none focus:border-blue-500 text-sm" 
                     />
                   </div>
 
-                  {/* RESUME PDF UPLOAD CONTAINER */}
+                  {/* RESUME CLOUDINARY UPLOAD CONTAINER */}
                   <div className="bg-gray-900/80 p-5 rounded-2xl border border-gray-700/80 space-y-3">
                     <div className="flex justify-between items-center">
                       <label className="block text-sm font-bold text-blue-400 flex items-center gap-2">
-                        <span>Upload Academic Resume (PDF File)</span>
+                        <span>Upload Academic Resume (PDF File &rarr; Cloudinary)</span>
                         {!studentProfile.resumeUrl && <span className="text-xs text-red-400 font-bold">✕ Missing</span>}
                       </label>
                       {studentProfile.resumeUrl && (
-                        <a href={getResumeUrl(studentProfile.resumeUrl)} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:text-blue-300 underline font-semibold flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPreviewResume({
+                              url: studentProfile.resumeUrl,
+                              studentName: user.name,
+                              positionTitle: 'Student Academic Profile'
+                            });
+                            setShowResumeModal(true);
+                          }}
+                          className="text-xs text-blue-400 hover:text-blue-300 underline font-semibold flex items-center gap-1"
+                        >
                           📄 View Current Resume
-                        </a>
+                        </button>
                       )}
                     </div>
                     
@@ -1204,14 +1212,14 @@ const Dashboard = () => {
                       />
                     </div>
                     {isUploadingProfileResume && (
-                      <p className="text-xs text-blue-400 font-semibold animate-pulse">Uploading PDF Resume to Portal...</p>
+                      <p className="text-xs text-blue-400 font-semibold animate-pulse">Streaming PDF Resume to Cloudinary Storage...</p>
                     )}
                     
                     <div>
-                      <label className="block text-xs font-semibold text-gray-400 mb-1">Resume Document URL (Auto-filled on upload)</label>
+                      <label className="block text-xs font-semibold text-gray-400 mb-1">Permanent Resume URL (Cloud Hosted)</label>
                       <input 
                         type="url" 
-                        placeholder="https://.../resume.pdf"
+                        placeholder="https://res.cloudinary.com/.../resume.pdf"
                         value={studentProfile.resumeUrl} 
                         onChange={(e) => setStudentProfile({...studentProfile, resumeUrl: e.target.value})}
                         className="w-full px-4 py-2 bg-gray-900 border border-gray-700 rounded-xl text-white text-xs outline-none focus:border-blue-500" 
@@ -1237,10 +1245,10 @@ const Dashboard = () => {
                 </div>
                 <input 
                   type="text" 
-                  placeholder="Search by title or company..." 
+                  placeholder="Search by title, department, or company..." 
                   value={searchTerm} 
                   onChange={(e) => setSearchTerm(e.target.value)} 
-                  className="w-full md:w-80 px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white outline-none focus:border-blue-500" 
+                  className="w-full md:w-80 px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white outline-none focus:border-blue-500 text-sm" 
                 />
               </div>
 
@@ -1255,7 +1263,7 @@ const Dashboard = () => {
                     const applied = hasApplied(job._id);
 
                     return (
-                      <div key={job._id} className="bg-gray-800 p-6 rounded-2xl border border-gray-700 flex flex-col justify-between hover:border-gray-500 transition-all shadow-lg">
+                      <div key={job._id} className="bg-gray-800 p-6 rounded-2xl border border-gray-700 flex flex-col justify-between hover:border-gray-500 transition-all shadow-lg space-y-4">
                         <div>
                           {/* Placement Drive Tag */}
                           <div className="flex justify-between items-start mb-3">
@@ -1268,11 +1276,11 @@ const Dashboard = () => {
                           </div>
 
                           <h3 className="text-xl font-bold text-white line-clamp-1">{job.title}</h3>
-                          <p className="text-blue-400 text-sm font-semibold mb-3">{job.company?.name || 'Participating Company'}</p>
-                          <p className="text-gray-400 text-sm mb-4 line-clamp-2">{job.description}</p>
+                          <p className="text-blue-400 text-sm font-semibold mb-2">{job.company?.name || 'Participating Company'}</p>
+                          <p className="text-gray-400 text-xs mb-3 line-clamp-2">{job.description}</p>
 
                           {/* Eligibility Criteria Breakdown */}
-                          <div className="bg-gray-900/70 p-3 rounded-xl border border-gray-700/60 mb-4 space-y-1 text-xs">
+                          <div className="bg-gray-900/70 p-3 rounded-xl border border-gray-700/60 mb-2 space-y-1 text-xs">
                             <p className="text-gray-300 font-semibold mb-1">Eligibility Criteria:</p>
                             <div className="flex justify-between text-gray-400">
                               <span>Min CGPA:</span>
@@ -1284,7 +1292,7 @@ const Dashboard = () => {
                             </div>
                             {job.eligibility?.allowedDepartments?.length > 0 && (
                               <div className="text-gray-400">
-                                <span>Allowed Depts:</span>
+                                <span>Eligible Depts:</span>
                                 <p className="font-medium text-blue-300 line-clamp-1">{job.eligibility.allowedDepartments.join(', ')}</p>
                               </div>
                             )}
@@ -1354,60 +1362,85 @@ const Dashboard = () => {
             </div>
           )}
 
-          {/* APPLICATION TRACKER & RECRUITMENT STAGES */}
+          {/* APPLICATION TRACKER WITH ROUND EVALUATION FEEDBACK */}
           {currentView === 'applications' && (
-            <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl animate-fade-in space-y-6">
-              <h3 className="text-xl font-bold text-white">Application Pipeline & Recruitment Progress</h3>
+            <div className="space-y-6 animate-fade-in">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h3 className="text-xl font-bold text-white">Application Pipeline & Round Progress</h3>
+                  <p className="text-gray-400 text-xs">Track real-time evaluation scores, stage feedback, and interview schedules</p>
+                </div>
+                <span className="text-xs px-3 py-1 bg-blue-950 text-blue-300 rounded-xl border border-blue-800 font-bold">
+                  {filteredAppsByDrive.length} Application(s)
+                </span>
+              </div>
               
               {filteredAppsByDrive.length === 0 ? (
                 <div className="text-center py-12 bg-gray-900/30 rounded-xl border border-gray-700">
                   <p className="text-gray-400">No applications submitted for the selected Placement Drive yet.</p>
-                  <button onClick={() => navigate('/dashboard/opportunities')} className="mt-4 text-blue-400 hover:text-blue-300 font-semibold">Browse Open Placement Positions &rarr;</button>
+                  <button onClick={() => navigate('/dashboard/opportunities')} className="mt-4 text-blue-400 hover:text-blue-300 font-semibold text-sm">Browse Open Placement Positions &rarr;</button>
                 </div>
               ) : (
-                <div className="overflow-x-auto rounded-xl border border-gray-700">
-                  <table className="w-full text-left text-sm text-gray-300">
-                    <thead className="bg-gray-900/70 text-gray-200 border-b border-gray-700">
-                      <tr>
-                        <th className="px-6 py-4">Placement Drive</th>
-                        <th className="px-6 py-4">Position Title</th>
-                        <th className="px-6 py-4">Company</th>
-                        <th className="px-6 py-4">Recruitment Stage</th>
-                        <th className="px-6 py-4 text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-700 bg-gray-800/40">
-                      {filteredAppsByDrive.map((app) => (
-                        <tr key={app._id} className="hover:bg-gray-700/40 transition-colors">
-                          <td className="px-6 py-4 text-blue-400 font-semibold">
-                            {app.drive?.name || app.job?.drive?.name || 'Campus Drive'}
-                          </td>
-                          <td className="px-6 py-4 text-white font-semibold">{app.job?.title || 'Position'}</td>
-                          <td className="px-6 py-4 text-gray-300">{app.job?.company?.name || 'Organization'}</td>
-                          <td className="px-6 py-4">
-                            <span className={`px-3 py-1 rounded-full text-xs font-semibold border ${getStatusStyle(app.status)}`}>
-                              {app.status}
+                <div className="space-y-6">
+                  {filteredAppsByDrive.map((app) => (
+                    <div key={app._id} className="bg-gray-800 rounded-2xl border border-gray-700 p-6 shadow-xl space-y-4">
+                      <div className="flex flex-wrap justify-between items-start gap-4 border-b border-gray-700 pb-4">
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-xs font-bold px-2.5 py-0.5 bg-blue-950 text-blue-300 rounded-md border border-blue-800">
+                              🎯 {app.drive?.name || app.job?.drive?.name || 'Campus Drive'}
                             </span>
-                            
-                            {/* Show Scheduled Interview Details */}
-                            {(app.status === 'Technical Interview' || app.status === 'HR Interview' || app.status === 'Interview Scheduled') && app.interviewDate && (
-                              <div className="mt-2 p-2 bg-indigo-900/40 border border-indigo-700/60 rounded-xl text-xs text-indigo-200 w-max">
-                                <p className="font-semibold mb-0.5">📅 {app.interviewDate} at {app.interviewTime}</p>
-                                <a href={app.interviewLink} target="_blank" rel="noopener noreferrer" className="text-indigo-400 underline font-bold hover:text-indigo-300">Join Video Interview</a>
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 text-right">
-                            {app.status !== 'Selected' && app.status !== 'Hired' && (
-                              <button onClick={() => handleWithdrawApplication(app._id)} className="text-red-400 hover:text-red-300 font-medium bg-red-950/40 border border-red-800/50 px-3 py-1 rounded-lg">
-                                Withdraw
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                            <span className="text-xs text-gray-400 font-medium">Applied: {new Date(app.createdAt).toLocaleDateString()}</span>
+                          </div>
+                          <h4 className="text-xl font-bold text-white">{app.job?.title || 'Position'}</h4>
+                          <p className="text-blue-400 font-semibold text-sm">{app.job?.company?.name || 'Recruiting Company'}</p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-3">
+                          <span className={`px-3.5 py-1.5 rounded-xl text-xs font-bold border ${getStatusStyle(app.status)}`}>
+                            {app.status}
+                          </span>
+
+                          {app.status !== 'Selected' && app.status !== 'Hired' && app.status !== 'Withdrawn' && (
+                            <button 
+                              onClick={() => handleWithdrawApplication(app._id)} 
+                              className="text-red-400 hover:text-red-300 font-semibold bg-red-950/40 border border-red-800/50 px-3 py-1.5 rounded-xl text-xs transition-colors"
+                            >
+                              Withdraw Application
+                            </button>
+                          )}
+                          {app.status === 'Withdrawn' && (
+                            <span className="text-xs px-3 py-1 bg-gray-900 text-gray-400 rounded-xl border border-gray-700">
+                              Application Withdrawn
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Scheduled Interview Banner */}
+                      {(app.status === 'Technical Interview' || app.status === 'HR Interview' || app.status === 'Interview Scheduled') && app.interviewDate && (
+                        <div className="p-4 bg-indigo-950/60 border border-indigo-700/80 rounded-xl text-xs text-indigo-200 flex flex-wrap justify-between items-center gap-3">
+                          <div>
+                            <p className="font-bold text-white text-sm mb-0.5">📅 Interview Scheduled: {app.interviewDate} at {app.interviewTime}</p>
+                            <p className="text-indigo-300">Please be present 5 minutes before your scheduled slot.</p>
+                          </div>
+                          {app.interviewLink && (
+                            <a 
+                              href={app.interviewLink} 
+                              target="_blank" 
+                              rel="noopener noreferrer" 
+                              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl text-xs transition-colors shadow-md"
+                            >
+                              Join Video Meeting &rarr;
+                            </a>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Round-by-Round Feedback Timeline */}
+                      <RoundTimelineCard application={app} isRecruiter={false} />
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -1418,28 +1451,44 @@ const Dashboard = () => {
       {/* ========================================================= */}
       {/*                        ADMIN VIEWS                        */}
       {/* ========================================================= */}
-      {user.role === 'admin' && (
+      {user.role === 'admin' && currentView !== 'departments' && currentView !== 'communication' && (
         <div className="space-y-8">
           
           {/* OVERVIEW */}
           {currentView === 'overview' && (
             <div className="animate-fade-in space-y-8">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                <button onClick={() => navigate('/dashboard/drives')} className="text-left p-6 rounded-2xl border bg-gray-800 border-gray-700 hover:border-blue-500 transition-all flex items-center gap-4 group">
-                  <div className="p-4 rounded-xl bg-blue-900/30 text-blue-400 group-hover:bg-blue-600 group-hover:text-white transition-colors"><svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg></div>
+                <button onClick={() => navigate('/dashboard/drives')} className="text-left p-6 rounded-2xl border bg-gray-800 border-gray-700 hover:border-blue-500 transition-all flex items-center gap-4 group shadow-lg">
+                  <div className="p-4 rounded-xl bg-blue-900/30 text-blue-400 group-hover:bg-blue-600 group-hover:text-white transition-colors text-2xl">🏛️</div>
                   <div><p className="text-gray-400 text-xs font-semibold uppercase">Placement Drives</p><h3 className="text-3xl font-bold text-white">{drives.length}</h3></div>
                 </button>
-                <button onClick={() => navigate('/dashboard/jobs')} className="text-left p-6 rounded-2xl border bg-gray-800 border-gray-700 hover:border-purple-500 transition-all flex items-center gap-4 group">
-                  <div className="p-4 rounded-xl bg-purple-900/30 text-purple-400 group-hover:bg-purple-600 group-hover:text-white transition-colors"><svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg></div>
+                <button onClick={() => navigate('/dashboard/jobs')} className="text-left p-6 rounded-2xl border bg-gray-800 border-gray-700 hover:border-purple-500 transition-all flex items-center gap-4 group shadow-lg">
+                  <div className="p-4 rounded-xl bg-purple-900/30 text-purple-400 group-hover:bg-purple-600 group-hover:text-white transition-colors text-2xl">💼</div>
                   <div><p className="text-gray-400 text-xs font-semibold uppercase">Drive Positions</p><h3 className="text-3xl font-bold text-white">{jobs.length}</h3></div>
                 </button>
-                <button onClick={() => navigate('/dashboard/applications')} className="text-left p-6 rounded-2xl border bg-gray-800 border-gray-700 hover:border-yellow-500 transition-all flex items-center gap-4 group">
-                  <div className="p-4 rounded-xl bg-yellow-900/30 text-yellow-400 group-hover:bg-yellow-600 group-hover:text-white transition-colors"><svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg></div>
+                <button onClick={() => navigate('/dashboard/applications')} className="text-left p-6 rounded-2xl border bg-gray-800 border-gray-700 hover:border-yellow-500 transition-all flex items-center gap-4 group shadow-lg">
+                  <div className="p-4 rounded-xl bg-yellow-900/30 text-yellow-400 group-hover:bg-yellow-600 group-hover:text-white transition-colors text-2xl">📋</div>
                   <div><p className="text-gray-400 text-xs font-semibold uppercase">Total Applications</p><h3 className="text-3xl font-bold text-white">{applications.length}</h3></div>
                 </button>
-                <button onClick={() => navigate('/dashboard/analytics')} className="text-left p-6 rounded-2xl border bg-gray-800 border-gray-700 hover:border-green-500 transition-all flex items-center gap-4 group">
-                  <div className="p-4 rounded-xl bg-green-900/30 text-green-400 group-hover:bg-green-600 group-hover:text-white transition-colors"><svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg></div>
+                <button onClick={() => navigate('/dashboard/departments')} className="text-left p-6 rounded-2xl border bg-gray-800 border-gray-700 hover:border-green-500 transition-all flex items-center gap-4 group shadow-lg">
+                  <div className="p-4 rounded-xl bg-green-900/30 text-green-400 group-hover:bg-green-600 group-hover:text-white transition-colors text-2xl">🎉</div>
                   <div><p className="text-gray-400 text-xs font-semibold uppercase">Placement Outcome</p><h3 className="text-3xl font-bold text-white">{placementPercentage}%</h3></div>
+                </button>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={() => setShowBulkImportModal(true)}
+                  className="px-5 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl text-xs transition-all shadow-lg flex items-center gap-2"
+                >
+                  <span>📥 Bulk Import Students from CSV</span>
+                </button>
+                <button
+                  onClick={() => exportDriveReportCSV(drives, jobs, applications, selectedDriveFilter)}
+                  className="px-5 py-3 bg-gray-800 hover:bg-gray-700 text-green-400 border border-green-500/40 font-bold rounded-2xl text-xs transition-all shadow-lg flex items-center gap-2"
+                >
+                  <span>📊 Export Complete Drive Report (CSV)</span>
                 </button>
               </div>
 
@@ -1599,24 +1648,84 @@ const Dashboard = () => {
 
                     <div className="pt-4 border-t border-gray-700 flex flex-wrap justify-between items-center gap-2">
                       <div className="flex items-center gap-2">
-                        <select 
-                          value={drive.status} 
+                        <select
+                          value={drive.status}
                           onChange={(e) => handleUpdateDriveStatus(drive._id, e.target.value)}
-                          className="bg-gray-900 text-xs font-semibold text-gray-300 border border-gray-700 rounded-lg px-2.5 py-1.5 outline-none cursor-pointer"
+                          className="text-xs bg-gray-900 border border-gray-600 rounded-lg text-white px-2 py-1 outline-none"
                         >
                           <option value="Upcoming">Upcoming</option>
                           <option value="Active">Active</option>
                           <option value="Completed">Completed</option>
                         </select>
-                        <button 
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button
                           onClick={() => handleOpenEditDrive(drive)}
-                          className="text-xs bg-blue-900/40 hover:bg-blue-600 text-blue-300 hover:text-white font-bold px-3 py-1.5 rounded-lg border border-blue-700/50 transition-colors flex items-center gap-1"
+                          className="text-xs text-blue-400 hover:text-blue-300 font-bold px-2 py-1 bg-blue-950 rounded border border-blue-800"
                         >
-                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
                           Edit
                         </button>
+                        <button
+                          onClick={() => handleDeleteDrive(drive._id)}
+                          className="text-xs text-red-400 hover:text-red-300 font-bold px-2 py-1 bg-red-950 rounded border border-red-800"
+                        >
+                          Delete
+                        </button>
                       </div>
-                      <button onClick={() => handleDeleteDrive(drive._id)} className="text-xs text-red-400 hover:text-red-300 font-bold px-2 py-1">
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* MANAGE POSITIONS (ADMIN) */}
+          {currentView === 'jobs' && (
+            <div className="space-y-6 animate-fade-in">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h3 className="text-xl font-bold text-white">All Active Position Postings</h3>
+                  <p className="text-gray-400 text-xs">Manage position postings linked across placement drives</p>
+                </div>
+              </div>
+
+              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                {jobs.map(job => (
+                  <div key={job._id} className="bg-gray-800 p-6 rounded-2xl border border-gray-700 flex flex-col justify-between shadow-lg space-y-4">
+                    <div>
+                      <div className="flex justify-between items-start mb-2">
+                        <span className="text-xs px-2.5 py-0.5 bg-blue-950 text-blue-300 rounded border border-blue-800 font-semibold">
+                          🎯 {job.drive?.name || 'Campus Drive'}
+                        </span>
+                        <span className="text-xs text-gray-400">{job.location}</span>
+                      </div>
+                      <h4 className="text-lg font-bold text-white">{job.title}</h4>
+                      <p className="text-blue-400 text-xs font-semibold mb-2">{job.company?.name || 'Organization'}</p>
+                      <p className="text-gray-400 text-xs line-clamp-2 mb-3">{job.description}</p>
+                      
+                      <div className="bg-gray-900/60 p-2.5 rounded-xl border border-gray-700 text-xs space-y-1">
+                        <p className="text-gray-300 font-semibold">Salary: <span className="text-green-400">{job.salary || 'Competitive'}</span></p>
+                        <p className="text-gray-300">Min CGPA: <span className="text-yellow-300 font-bold">{job.eligibility?.minCgpa || 0}</span></p>
+                        {job.eligibility?.allowedDepartments?.length > 0 && (
+                          <p className="text-gray-400 text-[11px] line-clamp-1">
+                            Depts: <strong className="text-blue-300">{job.eligibility.allowedDepartments.join(', ')}</strong>
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-gray-700 flex justify-between items-center">
+                      <button
+                        onClick={() => handleOpenEditJob(job)}
+                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-colors"
+                      >
+                        Edit Position
+                      </button>
+                      <button
+                        onClick={() => handleDeleteJob(job._id)}
+                        className="px-3 py-1.5 bg-red-950 text-red-400 hover:text-red-300 border border-red-800 rounded-xl text-xs font-bold transition-colors"
+                      >
                         Delete
                       </button>
                     </div>
@@ -1626,114 +1735,95 @@ const Dashboard = () => {
             </div>
           )}
 
-          {/* MANAGE POSITIONS */}
-          {currentView === 'jobs' && (
-            <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl animate-fade-in">
-              <h3 className="text-xl font-bold text-white mb-6">Manage Posted Positions (Drive Linked)</h3>
-              <div className="overflow-x-auto rounded-xl border border-gray-700">
-                <table className="w-full text-left text-sm text-gray-300">
-                  <thead className="bg-gray-900/70 text-gray-200 border-b border-gray-700">
-                    <tr>
-                      <th className="px-6 py-4">Placement Drive</th>
-                      <th className="px-6 py-4">Position Title</th>
-                      <th className="px-6 py-4">Company</th>
-                      <th className="px-6 py-4">Eligibility (CGPA / Backlogs)</th>
-                      <th className="px-6 py-4 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-700 bg-gray-800/40">
-                    {filteredJobsByDrive.map((job) => (
-                      <tr key={job._id} className="hover:bg-gray-700/40 transition-colors">
-                        <td className="px-6 py-4 text-blue-400 font-semibold">{job.drive?.name || 'Campus Drive'}</td>
-                        <td className="px-6 py-4 font-bold text-white">{job.title}</td>
-                        <td className="px-6 py-4">{job.company?.name || 'Internal'}</td>
-                        <td className="px-6 py-4 text-xs text-gray-300">
-                          Min CGPA: {job.eligibility?.minCgpa || 0} | Max Backlogs: {job.eligibility?.maxBacklogs ?? 0}
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          <div className="flex justify-end items-center gap-2">
-                            <button 
-                              onClick={() => handleOpenEditJob(job)} 
-                              className="text-blue-400 hover:text-blue-300 font-medium px-3 py-1 bg-blue-950/40 rounded-lg border border-blue-800/50 hover:bg-blue-900/60 transition-colors flex items-center gap-1 text-xs"
-                            >
-                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
-                              Edit
-                            </button>
-                            <button onClick={() => handleDeleteJob(job._id)} className="text-red-400 hover:text-red-300 font-medium px-3 py-1 bg-red-950/40 rounded-lg border border-red-800/50 text-xs">
-                              Delete
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* MANAGE ALL APPLICATIONS */}
+          {/* ALL APPLICATIONS (ADMIN PIPELINE & EVALUATIONS) */}
           {currentView === 'applications' && (
             <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl animate-fade-in space-y-6">
-              <h3 className="text-xl font-bold text-white">Student Application Pipeline & Stage Management</h3>
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div>
+                  <h3 className="text-xl font-bold text-white">All Candidate Applications</h3>
+                  <p className="text-gray-400 text-xs">Review applicant academic credentials, Cloudinary resumes, and multi-round evaluations</p>
+                </div>
+                <button
+                  onClick={() => exportApplicantsCSV('All_Applications', filteredAppsByDrive)}
+                  className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white font-bold rounded-xl text-xs shadow-md transition-all flex items-center gap-1.5"
+                >
+                  <span>📥 Export Applications (CSV)</span>
+                </button>
+              </div>
+
               <div className="overflow-x-auto rounded-xl border border-gray-700">
-                <table className="w-full text-left text-sm text-gray-300">
-                  <thead className="bg-gray-900/70 text-gray-200 border-b border-gray-700">
+                <table className="w-full text-left text-xs text-gray-300">
+                  <thead className="bg-gray-900 text-gray-400 border-b border-gray-700 uppercase tracking-wider text-[11px]">
                     <tr>
-                      <th className="px-6 py-4">Student Name & Dept</th>
-                      <th className="px-6 py-4">Drive & Position</th>
-                      <th className="px-6 py-4">Resume</th>
-                      <th className="px-6 py-4">Recruitment Stage</th>
-                      <th className="px-6 py-4 text-right">Actions</th>
+                      <th className="p-3.5">Candidate</th>
+                      <th className="p-3.5">Position / Org</th>
+                      <th className="p-3.5">Department</th>
+                      <th className="p-3.5">CGPA</th>
+                      <th className="p-3.5">Stage / Status</th>
+                      <th className="p-3.5">Resume</th>
+                      <th className="p-3.5 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-700 bg-gray-800/40">
                     {filteredAppsByDrive.map((app) => (
                       <tr key={app._id} className="hover:bg-gray-700/40 transition-colors">
-                        <td className="px-6 py-4">
-                          <p className="font-bold text-white">{app.student?.name || 'Student'}</p>
-                          <p className="text-xs text-gray-400">{app.student?.academicDetails?.department} | CGPA: {app.student?.academicDetails?.cgpa}</p>
+                        <td className="p-3.5">
+                          <strong className="text-white block text-sm">{app.student?.name || 'Candidate'}</strong>
+                          <span className="text-gray-400">{app.student?.email}</span>
                         </td>
-                        <td className="px-6 py-4">
-                          <p className="font-semibold text-blue-400">{app.drive?.name || app.job?.drive?.name}</p>
-                          <p className="text-xs text-gray-300">{app.job?.title} ({app.job?.company?.name})</p>
+                        <td className="p-3.5">
+                          <span className="font-bold text-white block">{app.job?.title}</span>
+                          <span className="text-blue-400">{app.job?.company?.name}</span>
                         </td>
-                        <td className="px-6 py-4">
-                          {app.resumeUrl ? (
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => handlePreviewResume(app.resumeUrl, app.student?.name || 'Student', app.job?.title || '')}
-                                className="text-xs bg-blue-900/40 hover:bg-blue-600 text-blue-300 hover:text-white px-2.5 py-1 rounded-lg border border-blue-700/50 transition-colors font-semibold"
-                              >
-                                Preview
-                              </button>
-                              <a 
-                                href={getResumeUrl(app.resumeUrl)} 
-                                target="_blank" 
-                                rel="noopener noreferrer" 
-                                className="text-gray-400 hover:text-white text-xs underline"
-                              >
-                                Open
-                              </a>
-                            </div>
+                        <td className="p-3.5 font-bold text-gray-200">
+                          {app.student?.academicDetails?.department || 'N/A'}
+                        </td>
+                        <td className="p-3.5 font-bold text-yellow-300">
+                          {app.student?.academicDetails?.cgpa || 'N/A'}
+                        </td>
+                        <td className="p-3.5">
+                          {app.status === 'Withdrawn' ? (
+                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-gray-800 text-gray-400 border border-gray-700">
+                              Candidate Withdrawn
+                            </span>
                           ) : (
-                            <span className="text-xs text-gray-500 italic">No resume</span>
+                            <select
+                              value={app.status}
+                              onChange={(e) => handleUpdateAppStatus(app._id, e.target.value)}
+                              className="text-xs bg-gray-900 border border-gray-600 rounded-lg text-white px-2 py-1 outline-none font-semibold"
+                            >
+                              {RECRUITMENT_STAGES.filter(s => s !== 'Withdrawn').map(stage => (
+                                <option key={stage} value={stage}>{stage}</option>
+                              ))}
+                            </select>
                           )}
                         </td>
-                        <td className="px-6 py-4">
-                          <select 
-                            value={app.status} 
-                            onChange={(e) => handleStatusChange(app._id, e.target.value)} 
-                            className={`text-xs font-semibold rounded-lg px-3 py-1.5 outline-none cursor-pointer border ${getStatusStyle(app.status)}`}
+                        <td className="p-3.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPreviewResume({
+                                url: app.resumeUrl,
+                                studentName: app.student?.name || 'Candidate',
+                                positionTitle: app.job?.title || 'Position'
+                              });
+                              setShowResumeModal(true);
+                            }}
+                            className="px-2.5 py-1 bg-blue-950 text-blue-300 hover:text-white rounded-lg border border-blue-800/80 font-bold transition-colors"
                           >
-                            {RECRUITMENT_STAGES.map(stage => (
-                              <option key={stage} value={stage} className="bg-gray-900 text-white">{stage}</option>
-                            ))}
-                          </select>
+                            📄 View Resume
+                          </button>
                         </td>
-                        <td className="px-6 py-4 text-right">
-                          <button onClick={() => handleDeleteApplication(app._id)} className="text-red-400 hover:text-red-300 text-xs font-semibold px-3 py-1 bg-red-950/40 rounded-lg border border-red-800/50">
-                            Terminate
+                        <td className="p-3.5 text-right space-x-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedAppForRound(app);
+                              setShowRoundModal(true);
+                            }}
+                            className="px-2.5 py-1 bg-purple-950 text-purple-300 hover:text-white rounded-lg border border-purple-800/80 font-bold transition-colors"
+                          >
+                            🎯 Rounds & Feedback ({app.rounds?.length || 0})
                           </button>
                         </td>
                       </tr>
@@ -1744,214 +1834,188 @@ const Dashboard = () => {
             </div>
           )}
 
-          {/* PLACEMENT ANALYTICS & DRIVE REPORTING */}
+          {/* ANALYTICS (ADMIN) */}
           {currentView === 'analytics' && (
-            <div className="space-y-8 animate-fade-in">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-6 animate-fade-in">
+              <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex justify-between items-center">
                 <div>
-                  <h2 className="text-2xl font-bold text-white">Placement Drive Reports & Analytics</h2>
-                  <p className="text-gray-400 text-sm">Real-time candidate metrics, department breakdown, and hiring statistics</p>
+                  <h3 className="text-xl font-bold text-white">Full Placement Analytics Report</h3>
+                  <p className="text-gray-400 text-xs">Drive performance and organization hiring benchmarks</p>
                 </div>
-                <button 
+                <button
                   onClick={() => exportDriveReportCSV(drives, jobs, applications, selectedDriveFilter)}
-                  className="px-5 py-2.5 bg-green-600 hover:bg-green-500 text-white font-bold rounded-xl shadow-lg transition-colors flex items-center gap-2 text-sm shrink-0"
+                  className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white font-bold rounded-xl text-xs transition-colors"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                  Export Drive Report (CSV)
+                  📥 Export Drive Report (CSV)
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
-                  <p className="text-gray-400 text-xs uppercase font-bold">Target Drive</p>
-                  <h3 className="text-base font-bold text-blue-400 mt-1 truncate">
-                    {selectedDriveFilter === 'ALL' ? 'All Placement Drives' : (drives.find(d => d._id === selectedDriveFilter)?.name || 'Drive')}
-                  </h3>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg">
+                  <h4 className="text-lg font-bold text-white mb-4">Stage Distribution</h4>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={stageStats} cx="50%" cy="50%" innerRadius={60} outerRadius={90} paddingAngle={4} dataKey="count">
+                          {stageStats.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
+                        </Pie>
+                        <Tooltip contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151', color: '#fff' }} />
+                        <Legend />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
                 </div>
-                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
-                  <p className="text-gray-400 text-xs uppercase font-bold">Total Applications</p>
-                  <h3 className="text-2xl font-bold text-white mt-1">{filteredAppsByDrive.length}</h3>
-                </div>
-                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
-                  <p className="text-gray-400 text-xs uppercase font-bold">Placed / Hired</p>
-                  <h3 className="text-2xl font-bold text-green-400 mt-1">{selectedCount}</h3>
-                </div>
-                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
-                  <p className="text-gray-400 text-xs uppercase font-bold">Terminated / Withdrawn</p>
-                  <h3 className="text-2xl font-bold text-rose-400 mt-1">{terminatedCount}</h3>
-                </div>
-                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
-                  <p className="text-gray-400 text-xs uppercase font-bold">Placement Rate</p>
-                  <h3 className="text-2xl font-bold text-cyan-400 mt-1">{placementPercentage}%</h3>
+
+                <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg">
+                  <h4 className="text-lg font-bold text-white mb-4">Department Placed Stats</h4>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={deptStats}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                        <XAxis dataKey="department" stroke="#9ca3af" />
+                        <YAxis stroke="#9ca3af" allowDecimals={false} />
+                        <Tooltip contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151', color: '#fff' }} />
+                        <Bar dataKey="selected" fill="#22c55e" name="Offers Extended" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
                 </div>
               </div>
-
-              {/* Department Statistics Table */}
-              <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
-                <h3 className="text-xl font-bold text-white mb-4">Department-wise Placement Report</h3>
-                <div className="overflow-x-auto rounded-xl border border-gray-700">
-                  <table className="w-full text-left text-sm text-gray-300">
-                    <thead className="bg-gray-900/70 text-gray-200 border-b border-gray-700">
-                      <tr>
-                        <th className="px-6 py-4">Department</th>
-                        <th className="px-6 py-4">Applications Submitted</th>
-                        <th className="px-6 py-4">Selections / Hires</th>
-                        <th className="px-6 py-4">Department Placement %</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-700 bg-gray-800/40">
-                      {deptStats.map(d => {
-                        const pct = d.applications > 0 ? Math.round((d.selected / d.applications) * 100) : 0;
-                        return (
-                          <tr key={d.department} className="hover:bg-gray-700/40">
-                            <td className="px-6 py-4 font-bold text-white">{d.department}</td>
-                            <td className="px-6 py-4 text-blue-400 font-semibold">{d.applications}</td>
-                            <td className="px-6 py-4 text-green-400 font-semibold">{d.selected}</td>
-                            <td className="px-6 py-4 font-bold text-cyan-400">{pct}%</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* Organization-wise Hiring Statistics Table */}
-              <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
-                <h3 className="text-xl font-bold text-white mb-4">Organization-wise Hiring Statistics</h3>
-                <div className="overflow-x-auto rounded-xl border border-gray-700">
-                  <table className="w-full text-left text-sm text-gray-300">
-                    <thead className="bg-gray-900/70 text-gray-200 border-b border-gray-700">
-                      <tr>
-                        <th className="px-6 py-4">Participating Organization</th>
-                        <th className="px-6 py-4">Drive Positions</th>
-                        <th className="px-6 py-4">Candidate Applications</th>
-                        <th className="px-6 py-4">Selected / Hired</th>
-                        <th className="px-6 py-4">Hiring Success Rate</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-700 bg-gray-800/40">
-                      {orgStats.map(org => {
-                        const hireRate = org.applications > 0 ? Math.round((org.selected / org.applications) * 100) : 0;
-                        return (
-                          <tr key={org.name} className="hover:bg-gray-700/40">
-                            <td className="px-6 py-4 font-bold text-white">{org.name}</td>
-                            <td className="px-6 py-4 text-purple-400 font-semibold">{org.positions}</td>
-                            <td className="px-6 py-4 text-blue-400 font-semibold">{org.applications}</td>
-                            <td className="px-6 py-4 text-green-400 font-semibold">{org.selected}</td>
-                            <td className="px-6 py-4 font-bold text-cyan-400">{hireRate}%</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
             </div>
           )}
+
         </div>
       )}
 
       {/* ========================================================= */}
       {/*                       COMPANY VIEWS                       */}
       {/* ========================================================= */}
-      {user.role === 'company' && (
+      {user.role === 'company' && currentView !== 'departments' && currentView !== 'communication' && (
         <div className="space-y-8">
           
           {/* OVERVIEW */}
           {currentView === 'overview' && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in">
-              <button onClick={() => navigate('/dashboard/post')} className="text-left p-6 rounded-2xl border bg-gray-800 border-gray-700 hover:border-blue-500 flex items-center gap-4 transition-all group shadow-lg">
-                <div className="p-4 rounded-xl bg-blue-900/30 text-blue-400 group-hover:bg-blue-600 group-hover:text-white transition-colors"><svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg></div>
-                <div><p className="text-gray-400 text-xs font-semibold uppercase">Participate in Drive</p><h3 className="text-xl font-bold text-white mt-1">Post Position &rarr;</h3></div>
-              </button>
-              <button onClick={() => navigate('/dashboard/jobs')} className="text-left p-6 rounded-2xl border bg-gray-800 border-gray-700 hover:border-green-500 flex items-center gap-4 transition-all group shadow-lg">
-                <div className="p-4 rounded-xl bg-green-900/30 text-green-400 group-hover:bg-green-600 group-hover:text-white transition-colors"><svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg></div>
-                <div><p className="text-gray-400 text-xs font-semibold uppercase">Our Positions</p><h3 className="text-xl font-bold text-white mt-1">{jobs.length} Positions &rarr;</h3></div>
-              </button>
-              <button onClick={() => navigate('/dashboard/applications')} className="text-left p-6 rounded-2xl border bg-gray-800 border-gray-700 hover:border-purple-500 flex items-center gap-4 transition-all group shadow-lg">
-                <div className="p-4 rounded-xl bg-purple-900/30 text-purple-400 group-hover:bg-purple-600 group-hover:text-white transition-colors"><svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg></div>
-                <div><p className="text-gray-400 text-xs font-semibold uppercase">Candidate Pipeline</p><h3 className="text-xl font-bold text-white mt-1">{applications.length} Candidates &rarr;</h3></div>
-              </button>
+            <div className="animate-fade-in space-y-8">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg flex items-center gap-4">
+                  <div className="p-4 rounded-xl bg-blue-900/30 text-blue-400 text-2xl">💼</div>
+                  <div><p className="text-gray-400 text-xs uppercase font-semibold">Our Active Roles</p><h3 className="text-3xl font-bold text-white">{jobs.length}</h3></div>
+                </div>
+                <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg flex items-center gap-4">
+                  <div className="p-4 rounded-xl bg-purple-900/30 text-purple-400 text-2xl">👥</div>
+                  <div><p className="text-gray-400 text-xs uppercase font-semibold">Total Applicants</p><h3 className="text-3xl font-bold text-white">{applications.length}</h3></div>
+                </div>
+                <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg flex items-center gap-4">
+                  <div className="p-4 rounded-xl bg-yellow-900/30 text-yellow-400 text-2xl">🎯</div>
+                  <div><p className="text-gray-400 text-xs uppercase font-semibold">Shortlisted / Interviews</p><h3 className="text-3xl font-bold text-white">{applications.filter(a => ['Shortlisted', 'Assessment Round', 'Technical Interview', 'HR Interview', 'Interview Scheduled'].includes(a.status)).length}</h3></div>
+                </div>
+                <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg flex items-center gap-4">
+                  <div className="p-4 rounded-xl bg-green-900/30 text-green-400 text-2xl">🎉</div>
+                  <div><p className="text-gray-400 text-xs uppercase font-semibold">Hired Candidates</p><h3 className="text-3xl font-bold text-white">{selectedCount}</h3></div>
+                </div>
+              </div>
+
+              {/* Quick Actions */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <button onClick={() => navigate('/dashboard/post')} className="bg-gray-800 p-6 rounded-2xl border border-gray-700 hover:border-blue-500 text-left transition-all group shadow-lg">
+                  <h3 className="text-xl font-bold text-white group-hover:text-blue-400 transition-colors">➕ Post New Position &rarr;</h3>
+                  <p className="text-gray-400 text-sm mt-2">Create new hiring opportunities attached to placement drives with eligibility constraints.</p>
+                </button>
+                <button onClick={() => navigate('/dashboard/applications')} className="bg-gray-800 p-6 rounded-2xl border border-gray-700 hover:border-purple-500 text-left transition-all group shadow-lg">
+                  <h3 className="text-xl font-bold text-white group-hover:text-purple-400 transition-colors">👥 Candidate Pipeline & Rounds &rarr;</h3>
+                  <p className="text-gray-400 text-sm mt-2">Evaluate candidate resumes, score rounds, share feedback, and schedule interviews.</p>
+                </button>
+                <button onClick={() => navigate('/dashboard/communication')} className="bg-gray-800 p-6 rounded-2xl border border-gray-700 hover:border-green-500 text-left transition-all group shadow-lg">
+                  <h3 className="text-xl font-bold text-white group-hover:text-green-400 transition-colors">📢 Broadcast Candidate Alerts &rarr;</h3>
+                  <p className="text-gray-400 text-sm mt-2">Send shortlisted announcements and interview instructions directly to candidates.</p>
+                </button>
+              </div>
             </div>
           )}
 
-          {/* CREATE POSITION (DRIVE LINKED) */}
+          {/* CREATE POSITION (COMPANY) */}
           {currentView === 'post' && (
-            <div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-xl max-w-3xl mx-auto animate-fade-in">
-              <h2 className="text-2xl font-bold text-white mb-2">Create Position (Drive Linked)</h2>
-              <p className="text-gray-400 text-sm mb-6">Positions must be associated with an active Placement Drive before creation.</p>
-              
-              <form onSubmit={handleCreateJob} className="space-y-5">
+            <div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-xl max-w-3xl mx-auto animate-fade-in space-y-6">
+              <div className="border-b border-gray-700 pb-4">
+                <h3 className="text-2xl font-bold text-white">Create New Placement Position</h3>
+                <p className="text-gray-400 text-sm">Post a job opportunity with standardized department eligibility constraints</p>
+              </div>
+
+              <form onSubmit={handleCreateJob} className="space-y-6">
                 <div>
-                  <label className="block text-sm font-bold text-blue-400 mb-1.5">Target Placement Drive</label>
+                  <label className="block text-xs font-bold text-blue-400 mb-1.5">Target Placement Drive</label>
                   <select 
                     required 
                     value={newJob.drive} 
                     onChange={(e) => {
                       setNewJob({...newJob, drive: e.target.value});
                       if (jobErrors.drive) setJobErrors(prev => ({...prev, drive: null}));
-                    }} 
-                    className={`w-full px-4 py-3 bg-gray-900/60 rounded-xl text-white outline-none border focus:border-blue-500 ${jobErrors.drive ? 'border-red-500' : 'border-blue-500/50'}`}
+                    }}
+                    className={`w-full px-4 py-2.5 bg-gray-900 rounded-xl text-white text-sm outline-none border focus:border-blue-500 ${jobErrors.drive ? 'border-red-500' : 'border-blue-500/50'}`}
                   >
-                    <option value="">-- Select Active Placement Drive --</option>
+                    <option value="">-- Select Placement Drive --</option>
                     {drives.map(d => <option key={d._id} value={d._id}>{d.name} ({d.academicYear || '2025-2026'})</option>)}
                   </select>
                   {jobErrors.drive && <p className="text-red-400 text-xs mt-1">{jobErrors.drive}</p>}
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-4 border-t border-gray-700">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-semibold text-gray-300 mb-1.5">Position Title</label>
+                    <label className="block text-xs font-semibold text-gray-300 mb-1">Position Title</label>
                     <input 
                       type="text" 
                       required 
-                      placeholder="e.g. Software Developer" 
+                      placeholder="e.g. Software Development Engineer"
                       value={newJob.title} 
                       onChange={(e) => {
                         setNewJob({...newJob, title: e.target.value});
                         if (jobErrors.title) setJobErrors(prev => ({...prev, title: null}));
-                      }} 
-                      className={`w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border focus:border-blue-500 ${jobErrors.title ? 'border-red-500' : 'border-gray-600'}`} 
+                      }}
+                      className={`w-full px-4 py-2.5 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-blue-500 ${jobErrors.title ? 'border-red-500' : 'border-gray-600'}`} 
                     />
                     {jobErrors.title && <p className="text-red-400 text-xs mt-1">{jobErrors.title}</p>}
                   </div>
+
                   <div>
-                    <label className="block text-sm font-semibold text-gray-300 mb-1.5">Location</label>
+                    <label className="block text-xs font-semibold text-gray-300 mb-1">Job Location</label>
                     <input 
                       type="text" 
                       required 
-                      placeholder="e.g. Bengaluru / Remote" 
+                      placeholder="e.g. Bangalore / Remote"
                       value={newJob.location} 
                       onChange={(e) => {
                         setNewJob({...newJob, location: e.target.value});
                         if (jobErrors.location) setJobErrors(prev => ({...prev, location: null}));
-                      }} 
-                      className={`w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border focus:border-blue-500 ${jobErrors.location ? 'border-red-500' : 'border-gray-600'}`} 
+                      }}
+                      className={`w-full px-4 py-2.5 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-blue-500 ${jobErrors.location ? 'border-red-500' : 'border-gray-600'}`} 
                     />
                     {jobErrors.location && <p className="text-red-400 text-xs mt-1">{jobErrors.location}</p>}
                   </div>
+
                   <div>
-                    <label className="block text-sm font-semibold text-gray-300 mb-1.5">Salary Package (CTC)</label>
-                    <input type="text" placeholder="e.g. ₹8,00,000 LPA" value={newJob.salary} onChange={(e) => setNewJob({...newJob, salary: e.target.value})} className="w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border border-gray-600 focus:border-blue-500" />
+                    <label className="block text-xs font-semibold text-gray-300 mb-1">Salary Package (CTC)</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. ₹9,50,000 LPA"
+                      value={newJob.salary} 
+                      onChange={(e) => setNewJob({...newJob, salary: e.target.value})}
+                      className="w-full px-4 py-2.5 bg-gray-900 border border-gray-600 rounded-xl text-white text-sm outline-none focus:border-blue-500" 
+                    />
                   </div>
+
                   <div>
-                    <label className="block text-sm font-semibold text-yellow-400 mb-1.5">Target Graduation Year</label>
+                    <label className="block text-xs font-semibold text-yellow-400 mb-1">Target Graduation Year</label>
                     <input 
                       type="number" 
                       required 
                       value={newJob.targetGraduationYear} 
-                      onChange={(e) => {
-                        setNewJob({...newJob, targetGraduationYear: e.target.value});
-                        if (jobErrors.targetGraduationYear) setJobErrors(prev => ({...prev, targetGraduationYear: null}));
-                      }} 
-                      className={`w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border focus:border-yellow-500 ${jobErrors.targetGraduationYear ? 'border-red-500' : 'border-gray-600'}`} 
+                      onChange={(e) => setNewJob({...newJob, targetGraduationYear: e.target.value})}
+                      className="w-full px-4 py-2.5 bg-gray-900 border border-gray-600 rounded-xl text-white text-sm outline-none focus:border-yellow-500" 
                     />
-                    {jobErrors.targetGraduationYear && <p className="text-red-400 text-xs mt-1">{jobErrors.targetGraduationYear}</p>}
                   </div>
+
                   <div>
-                    <label className="block text-sm font-semibold text-yellow-400 mb-1.5">Minimum CGPA Required (0 - 10)</label>
+                    <label className="block text-xs font-semibold text-yellow-400 mb-1">Minimum CGPA Required (0 - 10)</label>
                     <input 
                       type="number" 
                       step="0.1" 
@@ -1959,304 +2023,405 @@ const Dashboard = () => {
                       min="0"
                       required 
                       value={newJob.minCgpa} 
-                      onChange={(e) => {
-                        setNewJob({...newJob, minCgpa: e.target.value});
-                        if (jobErrors.minCgpa) setJobErrors(prev => ({...prev, minCgpa: null}));
-                      }} 
-                      className={`w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border focus:border-yellow-500 ${jobErrors.minCgpa ? 'border-red-500' : 'border-gray-600'}`} 
+                      onChange={(e) => setNewJob({...newJob, minCgpa: e.target.value})}
+                      className="w-full px-4 py-2.5 bg-gray-900 border border-gray-600 rounded-xl text-white text-sm outline-none focus:border-yellow-500" 
                     />
-                    {jobErrors.minCgpa && <p className="text-red-400 text-xs mt-1">{jobErrors.minCgpa}</p>}
                   </div>
+
                   <div>
-                    <label className="block text-sm font-semibold text-yellow-400 mb-1.5">Max Active Backlogs Allowed</label>
+                    <label className="block text-xs font-semibold text-yellow-400 mb-1">Max Active Backlogs Allowed</label>
                     <input 
                       type="number" 
-                      min="0"
+                      min="0" 
                       required 
                       value={newJob.maxBacklogs} 
-                      onChange={(e) => {
-                        setNewJob({...newJob, maxBacklogs: e.target.value});
-                        if (jobErrors.maxBacklogs) setJobErrors(prev => ({...prev, maxBacklogs: null}));
-                      }} 
-                      className={`w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border focus:border-yellow-500 ${jobErrors.maxBacklogs ? 'border-red-500' : 'border-gray-600'}`} 
+                      onChange={(e) => setNewJob({...newJob, maxBacklogs: e.target.value})}
+                      className="w-full px-4 py-2.5 bg-gray-900 border border-gray-600 rounded-xl text-white text-sm outline-none focus:border-yellow-500" 
                     />
-                    {jobErrors.maxBacklogs && <p className="text-red-400 text-xs mt-1">{jobErrors.maxBacklogs}</p>}
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-semibold text-yellow-400 mb-1.5">Allowed Departments (Comma Separated)</label>
-                    <input type="text" placeholder="Computer Science, Information Technology, Electronics & Communication" value={newJob.allowedDepartments} onChange={(e) => setNewJob({...newJob, allowedDepartments: e.target.value})} className="w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border border-gray-600 focus:border-yellow-500" />
                   </div>
                 </div>
 
-                <div className="pt-4 border-t border-gray-700">
-                  <label className="block text-sm font-semibold text-gray-300 mb-1.5">Job Description & Responsibilities</label>
+                {/* Standardized Department Checkbox Pills */}
+                <div className="bg-gray-900/80 p-4 rounded-xl border border-gray-700 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <label className="block text-xs font-bold text-yellow-400">Allowed College Departments</label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setNewJob(prev => ({ ...prev, allowedDepartments: COLLEGE_DEPARTMENTS.map(d => d.name) }))}
+                        className="text-[11px] text-blue-400 hover:text-blue-300 font-bold"
+                      >
+                        Select All
+                      </button>
+                      <span className="text-gray-600">|</span>
+                      <button
+                        type="button"
+                        onClick={() => setNewJob(prev => ({ ...prev, allowedDepartments: [] }))}
+                        className="text-[11px] text-gray-400 hover:text-gray-300"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-gray-400">Click to toggle eligible department programs for this position:</p>
+                  
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {COLLEGE_DEPARTMENTS.map(dept => {
+                      const isSelected = Array.isArray(newJob.allowedDepartments) && newJob.allowedDepartments.includes(dept.name);
+                      return (
+                        <button
+                          key={dept.code}
+                          type="button"
+                          onClick={() => handleToggleDepartmentInNewJob(dept.name)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border ${
+                            isSelected 
+                              ? 'bg-blue-600 text-white border-blue-400 shadow-md' 
+                              : 'bg-gray-800 text-gray-300 border-gray-700 hover:border-gray-500'
+                          }`}
+                        >
+                          <span>{dept.icon}</span>
+                          <span>{dept.code}</span>
+                          {isSelected && <span>✓</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">Job Description & Responsibilities</label>
                   <textarea 
                     required 
-                    rows="4" 
+                    rows="3" 
+                    placeholder="Key responsibilities, team overview, and project scope..."
                     value={newJob.description} 
                     onChange={(e) => {
                       setNewJob({...newJob, description: e.target.value});
                       if (jobErrors.description) setJobErrors(prev => ({...prev, description: null}));
-                    }} 
-                    className={`w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border focus:border-blue-500 mb-1 ${jobErrors.description ? 'border-red-500' : 'border-gray-600'}`}
+                    }}
+                    className={`w-full px-4 py-2.5 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-blue-500 ${jobErrors.description ? 'border-red-500' : 'border-gray-600'}`} 
                   ></textarea>
-                  {jobErrors.description && <p className="text-red-400 text-xs mb-3">{jobErrors.description}</p>}
+                  {jobErrors.description && <p className="text-red-400 text-xs mt-1">{jobErrors.description}</p>}
+                </div>
 
+                <div>
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">Required Tech Stack & Skills</label>
                   <input 
                     type="text" 
                     required 
-                    placeholder="Required Tech Stack (e.g. MERN Stack, Python, AWS)" 
+                    placeholder="e.g. React.js, Node.js, MongoDB, REST APIs, Git"
                     value={newJob.requirements} 
                     onChange={(e) => {
                       setNewJob({...newJob, requirements: e.target.value});
                       if (jobErrors.requirements) setJobErrors(prev => ({...prev, requirements: null}));
-                    }} 
-                    className={`w-full px-4 py-2.5 bg-gray-900/60 rounded-xl text-white outline-none border focus:border-blue-500 mt-2 ${jobErrors.requirements ? 'border-red-500' : 'border-gray-600'}`} 
+                    }}
+                    className={`w-full px-4 py-2.5 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-blue-500 ${jobErrors.requirements ? 'border-red-500' : 'border-gray-600'}`} 
                   />
                   {jobErrors.requirements && <p className="text-red-400 text-xs mt-1">{jobErrors.requirements}</p>}
                 </div>
 
-                <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl transition-colors shadow-lg">
-                  Publish Position & Open for Applications
+                <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl shadow-lg transition-colors">
+                  Publish Position to Placement Drive
                 </button>
               </form>
             </div>
           )}
 
-          {/* MANAGE POSITIONS */}
+          {/* OUR POSTINGS (COMPANY) */}
           {currentView === 'jobs' && (
-            <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl animate-fade-in">
-              <h3 className="text-xl font-bold text-white mb-6">Our Drive Postings</h3>
-              <div className="overflow-x-auto rounded-xl border border-gray-700">
-                <table className="w-full text-left text-sm text-gray-300">
-                  <thead className="bg-gray-900/70 text-gray-200 border-b border-gray-700">
-                    <tr>
-                      <th className="px-6 py-4">Position Title</th>
-                      <th className="px-6 py-4">Placement Drive</th>
-                      <th className="px-6 py-4">Min CGPA</th>
-                      <th className="px-6 py-4 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-700 bg-gray-800/40">
-                    {filteredJobsByDrive.map((job) => (
-                      <tr key={job._id} className="hover:bg-gray-700/40 transition-colors">
-                        <td className="px-6 py-4 font-bold text-white">{job.title}</td>
-                        <td className="px-6 py-4 text-blue-400 font-semibold">{job.drive?.name || 'Campus Drive'}</td>
-                        <td className="px-6 py-4">{job.eligibility?.minCgpa || 0}</td>
-                        <td className="px-6 py-4 text-right">
-                          <div className="flex justify-end items-center gap-2">
-                            <button 
-                              onClick={() => handleOpenEditJob(job)} 
-                              className="text-blue-400 hover:text-blue-300 font-medium px-3 py-1 bg-blue-950/40 rounded-lg border border-blue-800/50 hover:bg-blue-900/60 transition-colors flex items-center gap-1 text-xs"
-                            >
-                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
-                              Edit
-                            </button>
-                            <button onClick={() => handleDeleteJob(job._id)} className="text-red-400 hover:text-red-300 px-3 py-1 bg-red-950/40 rounded-lg border border-red-800/50 hover:bg-red-900/60 transition-colors text-xs font-medium">
-                              Withdraw
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* CANDIDATE PIPELINE */}
-          {currentView === 'applications' && (
-            <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl animate-fade-in space-y-6">
-              <h3 className="text-xl font-bold text-white">Candidate Pipeline & Stage Advancement</h3>
-              <div className="overflow-x-auto rounded-xl border border-gray-700">
-                <table className="w-full text-left text-sm text-gray-300">
-                  <thead className="bg-gray-900/70 text-gray-200 border-b border-gray-700">
-                    <tr>
-                      <th className="px-6 py-4">Applicant Name</th>
-                      <th className="px-6 py-4">Position</th>
-                      <th className="px-6 py-4">Academic Details</th>
-                      <th className="px-6 py-4">Resume</th>
-                      <th className="px-6 py-4 text-right">Recruitment Stage</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-700 bg-gray-800/40">
-                    {filteredAppsByDrive.map((app) => (
-                      <tr key={app._id} className="hover:bg-gray-700/40 transition-colors">
-                        <td className="px-6 py-4 font-bold text-white">{app.student?.name || 'Candidate'}</td>
-                        <td className="px-6 py-4 text-blue-400 font-semibold">{app.job?.title}</td>
-                        <td className="px-6 py-4 text-xs text-gray-300">
-                          {app.student?.academicDetails?.department} | CGPA: {app.student?.academicDetails?.cgpa}
-                        </td>
-                        <td className="px-6 py-4">
-                          {app.resumeUrl ? (
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => handlePreviewResume(app.resumeUrl, app.student?.name || 'Candidate', app.job?.title || '')}
-                                className="text-xs bg-blue-900/40 hover:bg-blue-600 text-blue-300 hover:text-white px-2.5 py-1 rounded-lg border border-blue-700/50 transition-colors font-semibold"
-                              >
-                                Preview
-                              </button>
-                              <a 
-                                href={getResumeUrl(app.resumeUrl)} 
-                                target="_blank" 
-                                rel="noopener noreferrer" 
-                                className="text-gray-400 hover:text-white text-xs underline"
-                              >
-                                Open
-                              </a>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-gray-500 italic">No resume</span>
-                          )}
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          <select 
-                            value={app.status} 
-                            onChange={(e) => handleStatusChange(app._id, e.target.value)} 
-                            className={`text-xs font-semibold rounded-lg px-3 py-1.5 outline-none cursor-pointer border ${getStatusStyle(app.status)}`}
-                          >
-                            {RECRUITMENT_STAGES.map(stage => (
-                              <option key={stage} value={stage} className="bg-gray-900 text-white">{stage}</option>
-                            ))}
-                          </select>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* COMPANY DRIVE REPORTS & ANALYTICS */}
-          {currentView === 'analytics' && (
-            <div className="space-y-8 animate-fade-in">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-6 animate-fade-in">
+              <div className="flex justify-between items-center">
                 <div>
-                  <h2 className="text-2xl font-bold text-white">Drive Reports & Candidate Analytics</h2>
-                  <p className="text-gray-400 text-sm">Hiring progress and candidate statistics across placement drives</p>
+                  <h3 className="text-xl font-bold text-white">Our Posted Positions</h3>
+                  <p className="text-gray-400 text-xs">Manage your active recruitment openings</p>
                 </div>
-                <button 
-                  onClick={() => exportDriveReportCSV(drives, jobs, applications, selectedDriveFilter)}
-                  className="px-5 py-2.5 bg-green-600 hover:bg-green-500 text-white font-bold rounded-xl shadow-lg transition-colors flex items-center gap-2 text-sm shrink-0"
+                <button
+                  onClick={() => navigate('/dashboard/post')}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs shadow-md transition-colors"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                  Export Drive Report (CSV)
+                  ➕ Post New Position
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
-                  <p className="text-gray-400 text-xs uppercase font-bold">Target Drive</p>
-                  <h3 className="text-base font-bold text-blue-400 mt-1 truncate">
-                    {selectedDriveFilter === 'ALL' ? 'All Placement Drives' : (drives.find(d => d._id === selectedDriveFilter)?.name || 'Drive')}
-                  </h3>
+              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                {jobs.map(job => (
+                  <div key={job._id} className="bg-gray-800 p-6 rounded-2xl border border-gray-700 flex flex-col justify-between shadow-lg space-y-4">
+                    <div>
+                      <div className="flex justify-between items-start mb-2">
+                        <span className="text-xs px-2.5 py-0.5 bg-blue-950 text-blue-300 rounded border border-blue-800 font-semibold">
+                          🎯 {job.drive?.name || 'Campus Drive'}
+                        </span>
+                        <span className="text-xs text-gray-400">{job.location}</span>
+                      </div>
+                      <h4 className="text-lg font-bold text-white">{job.title}</h4>
+                      <p className="text-gray-400 text-xs line-clamp-2 my-2">{job.description}</p>
+                      
+                      <div className="bg-gray-900/60 p-2.5 rounded-xl border border-gray-700 text-xs space-y-1">
+                        <p className="text-gray-300 font-semibold">Salary: <span className="text-green-400">{job.salary || 'Competitive'}</span></p>
+                        <p className="text-gray-300">Min CGPA: <span className="text-yellow-300 font-bold">{job.eligibility?.minCgpa || 0}</span></p>
+                        {job.eligibility?.allowedDepartments?.length > 0 && (
+                          <p className="text-gray-400 text-[11px] line-clamp-1">
+                            Depts: <strong className="text-blue-300">{job.eligibility.allowedDepartments.join(', ')}</strong>
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-gray-700 flex justify-between items-center">
+                      <button
+                        onClick={() => handleOpenEditJob(job)}
+                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-colors"
+                      >
+                        Edit Position
+                      </button>
+                      <button
+                        onClick={() => handleDeleteJob(job._id)}
+                        className="px-3 py-1.5 bg-red-950 text-red-400 hover:text-red-300 border border-red-800 rounded-xl text-xs font-bold transition-colors"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* CANDIDATE PIPELINE & EVALUATIONS (COMPANY) */}
+          {currentView === 'applications' && (
+            <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl animate-fade-in space-y-6">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div>
+                  <h3 className="text-xl font-bold text-white">Candidate Pipeline & Evaluations</h3>
+                  <p className="text-gray-400 text-xs">Review candidate credentials, cloud resumes, score evaluation rounds, and schedule interviews</p>
                 </div>
-                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
-                  <p className="text-gray-400 text-xs uppercase font-bold">Candidates Applied</p>
-                  <h3 className="text-2xl font-bold text-white mt-1">{filteredAppsByDrive.length}</h3>
-                </div>
-                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
-                  <p className="text-gray-400 text-xs uppercase font-bold">Selected / Hired</p>
-                  <h3 className="text-2xl font-bold text-green-400 mt-1">{selectedCount}</h3>
-                </div>
-                <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-lg">
-                  <p className="text-gray-400 text-xs uppercase font-bold">Terminated / Withdrawn</p>
-                  <h3 className="text-2xl font-bold text-rose-400 mt-1">{terminatedCount}</h3>
-                </div>
+                <button
+                  onClick={() => exportApplicantsCSV('Candidate_Pipeline', filteredAppsByDrive)}
+                  className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white font-bold rounded-xl text-xs shadow-md transition-all flex items-center gap-1.5"
+                >
+                  <span>📥 Export Candidates (CSV)</span>
+                </button>
               </div>
 
-              {/* Department Statistics Table for Company */}
-              <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
-                <h3 className="text-xl font-bold text-white mb-4">Department-wise Candidate Performance</h3>
+              {filteredAppsByDrive.length === 0 ? (
+                <div className="text-center py-12 text-gray-400 text-xs italic bg-gray-900/40 rounded-xl border border-gray-800">
+                  No candidate applications received for your posted positions yet.
+                </div>
+              ) : (
                 <div className="overflow-x-auto rounded-xl border border-gray-700">
-                  <table className="w-full text-left text-sm text-gray-300">
-                    <thead className="bg-gray-900/70 text-gray-200 border-b border-gray-700">
+                  <table className="w-full text-left text-xs text-gray-300">
+                    <thead className="bg-gray-900 text-gray-400 border-b border-gray-700 uppercase tracking-wider text-[11px]">
                       <tr>
-                        <th className="px-6 py-4">Department</th>
-                        <th className="px-6 py-4">Applications Received</th>
-                        <th className="px-6 py-4">Selections / Hires</th>
-                        <th className="px-6 py-4">Department Conversion %</th>
+                        <th className="p-3.5">Candidate</th>
+                        <th className="p-3.5">Position</th>
+                        <th className="p-3.5">Department</th>
+                        <th className="p-3.5">CGPA</th>
+                        <th className="p-3.5">Stage / Status</th>
+                        <th className="p-3.5">Resume</th>
+                        <th className="p-3.5 text-right">Actions & Evaluations</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-700 bg-gray-800/40">
-                      {deptStats.map(d => {
-                        const pct = d.applications > 0 ? Math.round((d.selected / d.applications) * 100) : 0;
-                        return (
-                          <tr key={d.department} className="hover:bg-gray-700/40">
-                            <td className="px-6 py-4 font-bold text-white">{d.department}</td>
-                            <td className="px-6 py-4 text-blue-400 font-semibold">{d.applications}</td>
-                            <td className="px-6 py-4 text-green-400 font-semibold">{d.selected}</td>
-                            <td className="px-6 py-4 font-bold text-cyan-400">{pct}%</td>
-                          </tr>
-                        );
-                      })}
+                      {filteredAppsByDrive.map((app) => (
+                        <tr key={app._id} className="hover:bg-gray-700/40 transition-colors">
+                          <td className="p-3.5">
+                            <strong className="text-white block text-sm">{app.student?.name || 'Candidate'}</strong>
+                            <span className="text-gray-400">{app.student?.email}</span>
+                          </td>
+                          <td className="p-3.5 font-bold text-white">
+                            {app.job?.title}
+                          </td>
+                          <td className="p-3.5 font-bold text-blue-300">
+                            {app.student?.academicDetails?.department || 'N/A'}
+                          </td>
+                          <td className="p-3.5 font-bold text-yellow-300">
+                            {app.student?.academicDetails?.cgpa || 'N/A'}
+                          </td>
+                          <td className="p-3.5">
+                            {/* WITHDRAWN APPLICATION GUARD: Disable modification if Withdrawn */}
+                            {app.status === 'Withdrawn' ? (
+                              <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-gray-800 text-gray-400 border border-gray-700 inline-block" title="Candidate has withdrawn this application">
+                                ✕ Candidate Withdrawn
+                              </span>
+                            ) : (
+                              <select
+                                value={app.status}
+                                onChange={(e) => handleUpdateAppStatus(app._id, e.target.value)}
+                                className="text-xs bg-gray-900 border border-gray-600 rounded-lg text-white px-2 py-1 outline-none font-semibold"
+                              >
+                                {RECRUITMENT_STAGES.filter(s => s !== 'Withdrawn').map(stage => (
+                                  <option key={stage} value={stage}>{stage}</option>
+                                ))}
+                              </select>
+                            )}
+                          </td>
+                          <td className="p-3.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPreviewResume({
+                                  url: app.resumeUrl,
+                                  studentName: app.student?.name || 'Candidate',
+                                  positionTitle: app.job?.title || 'Position'
+                                });
+                                setShowResumeModal(true);
+                              }}
+                              className="px-2.5 py-1 bg-blue-950 text-blue-300 hover:text-white rounded-lg border border-blue-800/80 font-bold transition-colors"
+                            >
+                              📄 Resume
+                            </button>
+                          </td>
+                          <td className="p-3.5 text-right space-x-2">
+                            {app.status === 'Withdrawn' ? (
+                              <span className="text-[11px] text-gray-500 italic">Withdrawn by Student</span>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedAppForRound(app);
+                                    setShowRoundModal(true);
+                                  }}
+                                  className="px-2.5 py-1 bg-purple-950 text-purple-300 hover:text-white rounded-lg border border-purple-800/80 font-bold transition-colors"
+                                >
+                                  🎯 Rounds ({app.rounds?.length || 0})
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenInterviewModal(app)}
+                                  className="px-2.5 py-1 bg-indigo-950 text-indigo-300 hover:text-white rounded-lg border border-indigo-800/80 font-bold transition-colors"
+                                >
+                                  📅 Schedule
+                                </button>
+                              </>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
+              )}
+            </div>
+          )}
+
+          {/* DRIVE REPORTS (COMPANY) */}
+          {currentView === 'analytics' && (
+            <div className="space-y-6 animate-fade-in">
+              <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl flex justify-between items-center">
+                <div>
+                  <h3 className="text-xl font-bold text-white">Recruitment Performance Report</h3>
+                  <p className="text-gray-400 text-xs">Review applicant conversion funnels and interview outcomes</p>
+                </div>
+                <button
+                  onClick={() => exportApplicantsCSV('Company_Recruitment_Report', filteredAppsByDrive)}
+                  className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white font-bold rounded-xl text-xs transition-colors"
+                >
+                  📥 Export Candidate Report (CSV)
+                </button>
               </div>
 
-              {/* Recruitment Stage Breakdown Table */}
-              <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
-                <h3 className="text-xl font-bold text-white mb-4">Candidate Stage Breakdown</h3>
-                <div className="overflow-x-auto rounded-xl border border-gray-700">
-                  <table className="w-full text-left text-sm text-gray-300">
-                    <thead className="bg-gray-900/70 text-gray-200 border-b border-gray-700">
-                      <tr>
-                        <th className="px-6 py-4">Stage Name</th>
-                        <th className="px-6 py-4">Candidate Count</th>
-                        <th className="px-6 py-4">Stage Percentage</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-700 bg-gray-800/40">
-                      {stageStats.map(st => {
-                        const pct = filteredAppsByDrive.length > 0 ? Math.round((st.count / filteredAppsByDrive.length) * 100) : 0;
-                        return (
-                          <tr key={st.name} className="hover:bg-gray-700/40">
-                            <td className="px-6 py-4 font-bold text-white">{st.name}</td>
-                            <td className="px-6 py-4 text-blue-400 font-semibold">{st.count}</td>
-                            <td className="px-6 py-4 font-bold text-cyan-400">{pct}%</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg">
+                  <h4 className="text-lg font-bold text-white mb-4">Stage Breakdown</h4>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={stageStats} cx="50%" cy="50%" innerRadius={60} outerRadius={90} paddingAngle={4} dataKey="count">
+                          {stageStats.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
+                        </Pie>
+                        <Tooltip contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151', color: '#fff' }} />
+                        <Legend />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg">
+                  <h4 className="text-lg font-bold text-white mb-4">Department Distribution</h4>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={deptStats}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                        <XAxis dataKey="department" stroke="#9ca3af" />
+                        <YAxis stroke="#9ca3af" allowDecimals={false} />
+                        <Tooltip contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151', color: '#fff' }} />
+                        <Bar dataKey="applications" fill="#3b82f6" name="Applicants" radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="selected" fill="#22c55e" name="Hired" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
                 </div>
               </div>
             </div>
           )}
+
         </div>
       )}
 
-      {/* STUDENT UPLOAD RESUME MODAL */}
+      {/* ========================================================= */}
+      {/*                       SHARED MODALS                       */}
+      {/* ========================================================= */}
+
+      {/* APPLY FOR POSITION MODAL */}
       {selectedJobForApply && (
-        <div className="fixed inset-0 pt-16 bg-black/75 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
-          <div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 max-w-md w-full m-4 shadow-2xl space-y-6">
-            <div>
-              <h3 className="text-xl font-bold text-white">Apply for Position</h3>
-              <p className="text-blue-400 text-sm font-semibold">{selectedJobForApply.title} ({selectedJobForApply.company?.name})</p>
-              <p className="text-xs text-gray-400 mt-1">Drive: {selectedJobForApply.drive?.name}</p>
+        <div className="fixed inset-0 pt-16 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in p-4 overflow-y-auto">
+          <div className="bg-gray-900 border border-blue-500/50 rounded-2xl w-full max-w-lg shadow-2xl p-6 md:p-8 space-y-5 my-auto">
+            <div className="flex justify-between items-start border-b border-gray-800 pb-3">
+              <div>
+                <h3 className="text-xl font-bold text-white">Apply for Position</h3>
+                <p className="text-xs text-blue-400 font-semibold">{selectedJobForApply.title} - {selectedJobForApply.company?.name}</p>
+              </div>
+              <button 
+                onClick={() => { setSelectedJobForApply(null); setResumeFile(null); }}
+                className="text-gray-400 hover:text-white p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-gray-950 p-4 rounded-xl border border-gray-800 text-xs space-y-2 text-gray-300">
+              <p className="font-bold text-white text-sm mb-1">Academic Credentials to be Shared:</p>
+              <div className="grid grid-cols-2 gap-2">
+                <div><span>Department:</span> <strong className="text-blue-300 block">{user.academicDetails?.department || 'N/A'}</strong></div>
+                <div><span>CGPA:</span> <strong className="text-yellow-300 block">{user.academicDetails?.cgpa || 'N/A'}</strong></div>
+                <div><span>Graduation Year:</span> <strong className="text-gray-200 block">{user.academicDetails?.graduationYear || 2026}</strong></div>
+                <div><span>Active Backlogs:</span> <strong className="text-gray-200 block">{user.academicDetails?.activeBacklogs || 0}</strong></div>
+              </div>
             </div>
 
             <form onSubmit={submitApplication} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-300 mb-1">Attach Resume PDF</label>
+                <label className="block text-xs font-semibold text-gray-300 mb-1">
+                  Attach or Replace PDF Resume (Uploads to Cloudinary)
+                </label>
                 <input 
                   type="file" 
                   accept=".pdf" 
-                  onChange={(e) => setResumeFile(e.target.files[0])} 
-                  className="w-full bg-gray-900/50 p-2.5 rounded-xl text-gray-300 text-xs border border-gray-700" 
+                  onChange={(e) => setResumeFile(e.target.files[0])}
+                  className="w-full bg-gray-800 p-2.5 rounded-xl text-gray-300 text-xs border border-gray-700 file:mr-4 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
                 />
-                {user.academicDetails?.resumeUrl && (
-                  <p className="text-xs text-gray-400 mt-1">Or use default profile resume if no file selected.</p>
+                {user.academicDetails?.resumeUrl && !resumeFile && (
+                  <p className="text-[11px] text-green-400 mt-1 font-semibold">
+                    ✓ Using resume currently on your academic profile.
+                  </p>
                 )}
               </div>
 
-              <div className="flex gap-3 pt-4">
-                <button type="button" onClick={() => setSelectedJobForApply(null)} className="flex-1 px-4 py-2.5 bg-gray-700 text-gray-200 rounded-xl font-semibold hover:bg-gray-600">Cancel</button>
-                <button type="submit" disabled={isApplying} className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-500 disabled:bg-blue-900">
-                  {isApplying ? 'Submitting...' : 'Confirm Application'}
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => { setSelectedJobForApply(null); setResumeFile(null); }}
+                  className="flex-1 px-4 py-2.5 bg-gray-800 text-gray-300 rounded-xl text-xs font-semibold hover:bg-gray-700 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isApplying}
+                  className="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-lg transition-all disabled:opacity-50"
+                >
+                  {isApplying ? 'Submitting Application...' : 'Confirm & Apply'}
                 </button>
               </div>
             </form>
@@ -2265,157 +2430,89 @@ const Dashboard = () => {
       )}
 
       {/* SCHEDULE INTERVIEW MODAL */}
-      {showInterviewModal && (
-        <div className="fixed inset-0 pt-16 bg-black/75 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
-          <div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 max-w-md w-full m-4 shadow-2xl space-y-6">
-            <div>
-              <h3 className="text-xl font-bold text-white">Schedule Candidate Interview</h3>
-              <p className="text-gray-400 text-sm">Stage: <span className="font-bold text-indigo-400">{interviewDetails.stage}</span></p>
+      {showInterviewModal && selectedAppForInterview && (
+        <div className="fixed inset-0 pt-16 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in p-4 overflow-y-auto">
+          <div className="bg-gray-900 border border-indigo-500/50 rounded-2xl w-full max-w-md shadow-2xl p-6 md:p-8 space-y-5 my-auto">
+            <div className="flex justify-between items-start border-b border-gray-800 pb-3">
+              <div>
+                <h3 className="text-xl font-bold text-white">Schedule Candidate Interview</h3>
+                <p className="text-xs text-indigo-400 font-semibold">Candidate: {selectedAppForInterview.student?.name}</p>
+              </div>
+              <button 
+                onClick={() => { setShowInterviewModal(false); setSelectedAppForInterview(null); }}
+                className="text-gray-400 hover:text-white p-1"
+              >
+                ✕
+              </button>
             </div>
 
-            <form onSubmit={handleScheduleInterview} className="space-y-4">
+            <form onSubmit={handleSaveInterviewSchedule} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-300 mb-1">Interview Date</label>
-                <input 
-                  type="date" 
-                  required 
-                  min={new Date().toISOString().split('T')[0]}
-                  value={interviewDetails.date} 
-                  onChange={(e) => setInterviewDetails({...interviewDetails, date: e.target.value})} 
-                  className="w-full px-4 py-2 bg-gray-900/60 border border-gray-600 rounded-xl text-white text-sm outline-none" 
-                />
+                <label className="block text-xs font-semibold text-gray-300 mb-1">Interview Stage</label>
+                <select
+                  value={interviewDetails.stage}
+                  onChange={(e) => setInterviewDetails({ ...interviewDetails, stage: e.target.value })}
+                  className="w-full px-3.5 py-2.5 bg-gray-950 border border-gray-700 rounded-xl text-white text-xs outline-none focus:border-indigo-500"
+                >
+                  <option value="Assessment Round">Assessment Round</option>
+                  <option value="Technical Interview">Technical Interview</option>
+                  <option value="HR Interview">HR Interview</option>
+                  <option value="Interview Scheduled">General Interview</option>
+                </select>
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-300 mb-1">Interview Time</label>
-                <input type="time" required value={interviewDetails.time} onChange={(e) => setInterviewDetails({...interviewDetails, time: e.target.value})} className="w-full px-4 py-2 bg-gray-900/60 border border-gray-600 rounded-xl text-white text-sm outline-none" />
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">Date</label>
+                  <input
+                    type="date"
+                    required
+                    min={new Date().toISOString().split('T')[0]}
+                    value={interviewDetails.date}
+                    onChange={(e) => setInterviewDetails({ ...interviewDetails, date: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-950 border border-gray-700 rounded-xl text-white text-xs outline-none focus:border-indigo-500"
+                  />
+                  {interviewErrors.date && <p className="text-xs text-red-400 mt-1">{interviewErrors.date}</p>}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">Time Slot</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. 10:30 AM"
+                    value={interviewDetails.time}
+                    onChange={(e) => setInterviewDetails({ ...interviewDetails, time: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-950 border border-gray-700 rounded-xl text-white text-xs outline-none focus:border-indigo-500"
+                  />
+                  {interviewErrors.time && <p className="text-xs text-red-400 mt-1">{interviewErrors.time}</p>}
+                </div>
               </div>
+
               <div>
                 <label className="block text-xs font-semibold text-gray-300 mb-1">Meeting Link (Google Meet / Zoom)</label>
-                <input type="url" required placeholder="https://meet.google.com/..." value={interviewDetails.link} onChange={(e) => setInterviewDetails({...interviewDetails, link: e.target.value})} className="w-full px-4 py-2 bg-gray-900/60 border border-gray-600 rounded-xl text-white text-sm outline-none" />
-              </div>
-
-              <div className="flex gap-3 pt-4">
-                <button type="button" onClick={() => { setShowInterviewModal(false); setSelectedAppForInterview(null); }} className="flex-1 px-4 py-2.5 bg-gray-700 text-gray-200 rounded-xl font-semibold hover:bg-gray-600">Cancel</button>
-                <button type="submit" className="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-500">Send Invite</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* QUICK-FILL MISSING ACADEMIC PROFILE MODAL */}
-      {showQuickProfileModal && (
-        <div className="fixed inset-0 pt-16 bg-black/80 backdrop-blur-md flex items-center justify-center z-50 animate-fade-in p-4 overflow-y-auto">
-          <div className="bg-gray-800 p-6 md:p-8 rounded-2xl border border-yellow-500/50 max-w-lg w-full shadow-2xl space-y-5 my-auto">
-            <div className="border-b border-gray-700 pb-3">
-              <span className="text-xs font-bold uppercase tracking-wider text-yellow-400 bg-yellow-950/80 px-2.5 py-1 rounded border border-yellow-800">
-                Action Required
-              </span>
-              <h3 className="text-xl font-bold text-white mt-2">Configure Missing Academic Profile</h3>
-              <p className="text-gray-300 text-xs mt-1">
-                Please fill in the missing details below to satisfy placement drive eligibility checks and proceed with your application.
-              </p>
-            </div>
-
-            <form onSubmit={handleSaveQuickProfile} className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-300 mb-1 flex justify-between">
-                    <span>Department</span>
-                    {(!quickProfileData.department) && <span className="text-red-400 font-bold text-[10px]">✕ Missing</span>}
-                  </label>
-                  <select 
-                    required
-                    value={quickProfileData.department}
-                    onChange={(e) => setQuickProfileData({...quickProfileData, department: e.target.value})}
-                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-xl text-white text-xs outline-none focus:border-yellow-500"
-                  >
-                    <option value="">-- Select Department --</option>
-                    {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-gray-300 mb-1 flex justify-between">
-                    <span>Graduation Year</span>
-                    {(!quickProfileData.graduationYear) && <span className="text-red-400 font-bold text-[10px]">✕ Missing</span>}
-                  </label>
-                  <input 
-                    type="number" 
-                    required
-                    value={quickProfileData.graduationYear}
-                    onChange={(e) => setQuickProfileData({...quickProfileData, graduationYear: e.target.value})}
-                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-xl text-white text-xs outline-none focus:border-yellow-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-gray-300 mb-1 flex justify-between">
-                    <span>CGPA (0 - 10)</span>
-                    {(quickProfileData.cgpa === '' || quickProfileData.cgpa === undefined) && <span className="text-red-400 font-bold text-[10px]">✕ Missing</span>}
-                  </label>
-                  <input 
-                    type="number" 
-                    step="0.01"
-                    max="10"
-                    min="0"
-                    required
-                    placeholder="e.g. 8.5"
-                    value={quickProfileData.cgpa}
-                    onChange={(e) => setQuickProfileData({...quickProfileData, cgpa: e.target.value})}
-                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-xl text-white text-xs outline-none focus:border-yellow-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-gray-300 mb-1">Active Backlogs</label>
-                  <input 
-                    type="number" 
-                    min="0"
-                    required
-                    value={quickProfileData.activeBacklogs}
-                    onChange={(e) => setQuickProfileData({...quickProfileData, activeBacklogs: e.target.value})}
-                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-xl text-white text-xs outline-none focus:border-yellow-500"
-                  />
-                </div>
-              </div>
-
-              <div className="bg-gray-900/80 p-4 rounded-xl border border-gray-700/80 space-y-2">
-                <label className="block text-xs font-bold text-yellow-400 flex justify-between items-center">
-                  <span>Upload PDF Resume</span>
-                  {(!quickProfileData.resumeUrl && !user.academicDetails?.resumeUrl) && (
-                    <span className="text-red-400 font-bold text-[10px]">✕ Missing</span>
-                  )}
-                </label>
-                
-                <input 
-                  type="file" 
-                  accept=".pdf" 
-                  onChange={(e) => setQuickResumeFile(e.target.files[0])}
-                  className="w-full bg-gray-800 p-2 rounded-xl text-gray-300 text-xs border border-gray-600 file:mr-3 file:py-1 file:px-2.5 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-yellow-500 file:text-gray-950 hover:file:bg-yellow-400 cursor-pointer"
+                <input
+                  type="url"
+                  placeholder="https://meet.google.com/xyz-abc-123"
+                  value={interviewDetails.link}
+                  onChange={(e) => setInterviewDetails({ ...interviewDetails, link: e.target.value })}
+                  className="w-full px-3.5 py-2.5 bg-gray-950 border border-gray-700 rounded-xl text-white text-xs outline-none focus:border-indigo-500"
                 />
-
-                {(quickProfileData.resumeUrl || user.academicDetails?.resumeUrl) && (
-                  <p className="text-[11px] text-green-400 font-semibold flex items-center gap-1">
-                    ✓ Profile Resume already attached. (Selecting a new file will replace it)
-                  </p>
-                )}
               </div>
 
-              <div className="flex gap-3 pt-3">
-                <button 
-                  type="button" 
-                  onClick={() => setShowQuickProfileModal(false)}
-                  className="flex-1 px-4 py-2.5 bg-gray-700 text-gray-200 rounded-xl text-xs font-semibold hover:bg-gray-600 transition-colors"
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => { setShowInterviewModal(false); setSelectedAppForInterview(null); }}
+                  className="flex-1 px-4 py-2.5 bg-gray-800 text-gray-300 rounded-xl text-xs font-semibold hover:bg-gray-700 transition-colors"
                 >
                   Cancel
                 </button>
-                <button 
-                  type="submit" 
-                  disabled={isQuickSaving}
-                  className="flex-1 px-4 py-2.5 bg-yellow-500 hover:bg-yellow-400 text-gray-950 rounded-xl text-xs font-bold shadow-lg transition-colors disabled:opacity-50"
+                <button
+                  type="submit"
+                  className="flex-1 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg transition-colors"
                 >
-                  {isQuickSaving ? 'Saving Profile...' : 'Save & Unlock Application'}
+                  Confirm Schedule
                 </button>
               </div>
             </form>
@@ -2423,20 +2520,113 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* ================= EDIT PLACEMENT DRIVE MODAL ================= */}
-      {showEditDriveModal && editingDrive && (
+      {/* QUICK FILL PROFILE MODAL */}
+      {showQuickProfileModal && (
         <div className="fixed inset-0 pt-16 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in p-4 overflow-y-auto">
-          <div className="bg-gray-800 p-6 md:p-8 rounded-2xl border border-blue-500/50 max-w-xl w-full shadow-2xl space-y-5 my-auto">
-            <div className="flex justify-between items-start border-b border-gray-700 pb-3">
+          <div className="bg-gray-900 border border-yellow-500/50 rounded-2xl w-full max-w-lg shadow-2xl p-6 md:p-8 space-y-5 my-auto">
+            <div className="flex justify-between items-start border-b border-gray-800 pb-3">
               <div>
                 <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                  <span>✏️ Edit Placement Drive</span>
+                  <span>⚡ Quick Complete Academic Profile</span>
                 </h3>
-                <p className="text-gray-400 text-xs mt-0.5">Update placement drive timeline, details, and active status</p>
+                <p className="text-gray-400 text-xs mt-0.5">Required fields to evaluate your eligibility criteria</p>
+              </div>
+              <button 
+                onClick={() => setShowQuickProfileModal(false)}
+                className="text-gray-400 hover:text-white p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveQuickProfile} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-300 mb-1">Department</label>
+                <select
+                  required
+                  value={quickProfileData.department}
+                  onChange={(e) => setQuickProfileData({ ...quickProfileData, department: e.target.value })}
+                  className="w-full px-3.5 py-2.5 bg-gray-950 border border-gray-700 rounded-xl text-white text-xs outline-none focus:border-yellow-500"
+                >
+                  <option value="">-- Select Department --</option>
+                  {DEPARTMENT_OPTIONS.map(d => (
+                    <option key={d.code} value={d.value}>{d.icon} {d.label}</option>
+                  ))}
+                </select>
+                {quickProfileErrors.department && <p className="text-xs text-red-400 mt-1">{quickProfileErrors.department}</p>}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">CGPA (0 - 10)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="10"
+                    required
+                    value={quickProfileData.cgpa}
+                    onChange={(e) => setQuickProfileData({ ...quickProfileData, cgpa: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-950 border border-gray-700 rounded-xl text-white text-xs outline-none focus:border-yellow-500"
+                  />
+                  {quickProfileErrors.cgpa && <p className="text-xs text-red-400 mt-1">{quickProfileErrors.cgpa}</p>}
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">Graduation Year</label>
+                  <input
+                    type="number"
+                    required
+                    value={quickProfileData.graduationYear}
+                    onChange={(e) => setQuickProfileData({ ...quickProfileData, graduationYear: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-950 border border-gray-700 rounded-xl text-white text-xs outline-none focus:border-yellow-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-300 mb-1">Upload Resume (PDF)</label>
+                <input
+                  type="file"
+                  accept=".pdf"
+                  onChange={(e) => setQuickResumeFile(e.target.files[0])}
+                  className="w-full bg-gray-800 p-2 rounded-xl text-gray-300 text-xs border border-gray-700 file:mr-3 file:py-1 file:px-2.5 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-yellow-500 file:text-gray-950 hover:file:bg-yellow-400 cursor-pointer"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowQuickProfileModal(false)}
+                  className="flex-1 px-4 py-2.5 bg-gray-800 text-gray-300 rounded-xl text-xs font-semibold hover:bg-gray-700 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isQuickSaving}
+                  className="flex-1 px-4 py-2.5 bg-yellow-500 hover:bg-yellow-400 text-gray-950 rounded-xl text-xs font-bold shadow-lg transition-colors disabled:opacity-50"
+                >
+                  {isQuickSaving ? 'Saving...' : 'Save & Unlock'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT PLACEMENT DRIVE MODAL */}
+      {showEditDriveModal && editingDrive && (
+        <div className="fixed inset-0 pt-16 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in p-4 overflow-y-auto">
+          <div className="bg-gray-900 border border-blue-500/50 max-w-xl w-full rounded-2xl shadow-2xl p-6 md:p-8 space-y-5 my-auto">
+            <div className="flex justify-between items-start border-b border-gray-800 pb-3">
+              <div>
+                <h3 className="text-xl font-bold text-white">Edit Placement Drive</h3>
+                <p className="text-gray-400 text-xs mt-0.5">Update placement drive timeline and details</p>
               </div>
               <button 
                 onClick={() => { setShowEditDriveModal(false); setEditingDrive(null); }}
-                className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-700 transition-colors"
+                className="text-gray-400 hover:text-white p-1"
               >
                 ✕
               </button>
@@ -2449,37 +2639,27 @@ const Dashboard = () => {
                   type="text" 
                   required 
                   value={editingDrive.name} 
-                  onChange={(e) => {
-                    setEditingDrive({...editingDrive, name: e.target.value});
-                    if (editDriveErrors.name) setEditDriveErrors(prev => ({...prev, name: null}));
-                  }}
-                  className={`w-full px-4 py-2.5 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-blue-500 ${editDriveErrors.name ? 'border-red-500' : 'border-gray-600'}`}
+                  onChange={(e) => setEditingDrive({...editingDrive, name: e.target.value})}
+                  className="w-full px-4 py-2.5 bg-gray-950 border border-gray-700 rounded-xl text-white text-sm outline-none focus:border-blue-500"
                 />
-                {editDriveErrors.name && <p className="text-red-400 text-xs mt-1">{editDriveErrors.name}</p>}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-gray-300 mb-1">Academic Year</label>
                   <input 
                     type="text" 
                     value={editingDrive.academicYear} 
-                    onChange={(e) => {
-                      setEditingDrive({...editingDrive, academicYear: e.target.value});
-                      if (editDriveErrors.academicYear) setEditDriveErrors(prev => ({...prev, academicYear: null}));
-                    }}
-                    placeholder="e.g. 2025-2026"
-                    className={`w-full px-4 py-2.5 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-blue-500 ${editDriveErrors.academicYear ? 'border-red-500' : 'border-gray-600'}`}
+                    onChange={(e) => setEditingDrive({...editingDrive, academicYear: e.target.value})}
+                    className="w-full px-4 py-2 bg-gray-950 border border-gray-700 rounded-xl text-white text-sm outline-none focus:border-blue-500"
                   />
-                  {editDriveErrors.academicYear && <p className="text-red-400 text-xs mt-1">{editDriveErrors.academicYear}</p>}
                 </div>
-
                 <div>
                   <label className="block text-xs font-semibold text-gray-300 mb-1">Drive Status</label>
                   <select 
                     value={editingDrive.status} 
                     onChange={(e) => setEditingDrive({...editingDrive, status: e.target.value})}
-                    className="w-full px-4 py-2.5 bg-gray-900 border border-gray-600 rounded-xl text-white text-sm outline-none focus:border-blue-500"
+                    className="w-full px-4 py-2 bg-gray-950 border border-gray-700 rounded-xl text-white text-sm outline-none focus:border-blue-500"
                   >
                     <option value="Upcoming">Upcoming</option>
                     <option value="Active">Active</option>
@@ -2494,56 +2674,24 @@ const Dashboard = () => {
                   rows="3" 
                   value={editingDrive.description} 
                   onChange={(e) => setEditingDrive({...editingDrive, description: e.target.value})}
-                  placeholder="Overview of this placement drive..."
-                  className="w-full px-4 py-2.5 bg-gray-900 border border-gray-600 rounded-xl text-white text-sm outline-none focus:border-blue-500"
+                  className="w-full px-4 py-2 bg-gray-950 border border-gray-700 rounded-xl text-white text-sm outline-none focus:border-blue-500"
                 ></textarea>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-400 mb-1">Start Date</label>
-                  <input 
-                    type="date" 
-                    value={editingDrive.startDate} 
-                    onChange={(e) => {
-                      setEditingDrive({...editingDrive, startDate: e.target.value});
-                      if (editDriveErrors.startDate) setEditDriveErrors(prev => ({...prev, startDate: null}));
-                    }}
-                    className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-xs outline-none focus:border-blue-500 ${editDriveErrors.startDate ? 'border-red-500' : 'border-gray-600'}`}
-                  />
-                  {editDriveErrors.startDate && <p className="text-red-400 text-xs mt-1">{editDriveErrors.startDate}</p>}
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-gray-400 mb-1">End Date</label>
-                  <input 
-                    type="date" 
-                    min={editingDrive.startDate || undefined}
-                    value={editingDrive.endDate} 
-                    onChange={(e) => {
-                      setEditingDrive({...editingDrive, endDate: e.target.value});
-                      if (editDriveErrors.endDate) setEditDriveErrors(prev => ({...prev, endDate: null}));
-                    }}
-                    className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-xs outline-none focus:border-blue-500 ${editDriveErrors.endDate ? 'border-red-500' : 'border-gray-600'}`}
-                  />
-                  {editDriveErrors.endDate && <p className="text-red-400 text-xs mt-1">{editDriveErrors.endDate}</p>}
-                </div>
-              </div>
-
-              <div className="flex gap-3 pt-3 border-t border-gray-700">
+              <div className="flex gap-3 pt-2">
                 <button 
                   type="button" 
                   onClick={() => { setShowEditDriveModal(false); setEditingDrive(null); }}
-                  className="flex-1 px-4 py-2.5 bg-gray-700 text-gray-200 rounded-xl text-sm font-semibold hover:bg-gray-600 transition-colors"
+                  className="flex-1 px-4 py-2.5 bg-gray-800 text-gray-300 rounded-xl text-xs font-semibold hover:bg-gray-700 transition-colors"
                 >
                   Cancel
                 </button>
                 <button 
                   type="submit" 
                   disabled={isSavingDrive}
-                  className="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold shadow-lg transition-colors disabled:opacity-50"
+                  className="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-lg transition-colors disabled:opacity-50"
                 >
-                  {isSavingDrive ? 'Saving Changes...' : 'Save Drive Changes'}
+                  {isSavingDrive ? 'Saving...' : 'Save Drive Changes'}
                 </button>
               </div>
             </form>
@@ -2551,190 +2699,158 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* ================= EDIT JOB POSITION MODAL ================= */}
+      {/* EDIT JOB MODAL */}
       {showEditJobModal && editingJob && (
         <div className="fixed inset-0 pt-16 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in p-4 overflow-y-auto">
-          <div className="bg-gray-800 p-6 md:p-8 rounded-2xl border border-blue-500/50 max-w-2xl w-full shadow-2xl space-y-5 my-auto">
-            <div className="flex justify-between items-start border-b border-gray-700 pb-3">
+          <div className="bg-gray-900 border border-blue-500/50 max-w-2xl w-full rounded-2xl shadow-2xl p-6 md:p-8 space-y-5 my-auto max-h-[90vh]">
+            <div className="flex justify-between items-start border-b border-gray-800 pb-3">
               <div>
-                <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                  <span>✏️ Edit Drive Position</span>
-                </h3>
-                <p className="text-gray-400 text-xs mt-0.5">Modify role specifications, location, salary, and eligibility criteria</p>
+                <h3 className="text-xl font-bold text-white">Edit Position Specification</h3>
+                <p className="text-gray-400 text-xs mt-0.5">Modify role details, location, salary, and eligibility constraints</p>
               </div>
               <button 
                 onClick={() => { setShowEditJobModal(false); setEditingJob(null); }}
-                className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-gray-700 transition-colors"
+                className="text-gray-400 hover:text-white p-1"
               >
                 ✕
               </button>
             </div>
 
             <form onSubmit={handleSaveEditJob} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-blue-400 mb-1">Target Placement Drive</label>
-                <select 
-                  required 
-                  value={editingJob.drive} 
-                  onChange={(e) => {
-                    setEditingJob({...editingJob, drive: e.target.value});
-                    if (editJobErrors.drive) setEditJobErrors(prev => ({...prev, drive: null}));
-                  }}
-                  className={`w-full px-4 py-2.5 bg-gray-900 rounded-xl text-white text-sm outline-none border focus:border-blue-500 ${editJobErrors.drive ? 'border-red-500' : 'border-blue-500/50'}`}
-                >
-                  <option value="">-- Select Placement Drive --</option>
-                  {drives.map(d => <option key={d._id} value={d._id}>{d.name} ({d.academicYear || '2025-2026'})</option>)}
-                </select>
-                {editJobErrors.drive && <p className="text-red-400 text-xs mt-1">{editJobErrors.drive}</p>}
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-gray-300 mb-1">Position Title</label>
                   <input 
                     type="text" 
                     required 
                     value={editingJob.title} 
-                    onChange={(e) => {
-                      setEditingJob({...editingJob, title: e.target.value});
-                      if (editJobErrors.title) setEditJobErrors(prev => ({...prev, title: null}));
-                    }}
-                    className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-blue-500 ${editJobErrors.title ? 'border-red-500' : 'border-gray-600'}`}
+                    onChange={(e) => setEditingJob({...editingJob, title: e.target.value})}
+                    className="w-full px-4 py-2 bg-gray-950 border border-gray-700 rounded-xl text-white text-sm outline-none focus:border-blue-500"
                   />
-                  {editJobErrors.title && <p className="text-red-400 text-xs mt-1">{editJobErrors.title}</p>}
                 </div>
-
                 <div>
                   <label className="block text-xs font-semibold text-gray-300 mb-1">Location</label>
                   <input 
                     type="text" 
                     required 
                     value={editingJob.location} 
-                    onChange={(e) => {
-                      setEditingJob({...editingJob, location: e.target.value});
-                      if (editJobErrors.location) setEditJobErrors(prev => ({...prev, location: null}));
-                    }}
-                    className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-blue-500 ${editJobErrors.location ? 'border-red-500' : 'border-gray-600'}`}
+                    onChange={(e) => setEditingJob({...editingJob, location: e.target.value})}
+                    className="w-full px-4 py-2 bg-gray-950 border border-gray-700 rounded-xl text-white text-sm outline-none focus:border-blue-500"
                   />
-                  {editJobErrors.location && <p className="text-red-400 text-xs mt-1">{editJobErrors.location}</p>}
                 </div>
+              </div>
 
+              <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-300 mb-1">Salary Package (CTC)</label>
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">Salary Package</label>
                   <input 
                     type="text" 
                     value={editingJob.salary} 
                     onChange={(e) => setEditingJob({...editingJob, salary: e.target.value})}
-                    placeholder="e.g. ₹8,00,000 LPA"
-                    className="w-full px-4 py-2 bg-gray-900 border border-gray-600 rounded-xl text-white text-sm outline-none focus:border-blue-500"
+                    className="w-full px-3 py-2 bg-gray-950 border border-gray-700 rounded-xl text-white text-xs outline-none focus:border-blue-500"
                   />
                 </div>
-
                 <div>
-                  <label className="block text-xs font-semibold text-yellow-400 mb-1">Target Graduation Year</label>
-                  <input 
-                    type="number" 
-                    required 
-                    value={editingJob.targetGraduationYear} 
-                    onChange={(e) => {
-                      setEditingJob({...editingJob, targetGraduationYear: e.target.value});
-                      if (editJobErrors.targetGraduationYear) setEditJobErrors(prev => ({...prev, targetGraduationYear: null}));
-                    }}
-                    className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-yellow-500 ${editJobErrors.targetGraduationYear ? 'border-red-500' : 'border-gray-600'}`}
-                  />
-                  {editJobErrors.targetGraduationYear && <p className="text-red-400 text-xs mt-1">{editJobErrors.targetGraduationYear}</p>}
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-yellow-400 mb-1">Minimum CGPA Required (0 - 10)</label>
+                  <label className="block text-xs font-semibold text-yellow-400 mb-1">Min CGPA</label>
                   <input 
                     type="number" 
                     step="0.1" 
+                    min="0" 
                     max="10"
-                    min="0"
-                    required 
                     value={editingJob.minCgpa} 
-                    onChange={(e) => {
-                      setEditingJob({...editingJob, minCgpa: e.target.value});
-                      if (editJobErrors.minCgpa) setEditJobErrors(prev => ({...prev, minCgpa: null}));
-                    }}
-                    className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-yellow-500 ${editJobErrors.minCgpa ? 'border-red-500' : 'border-gray-600'}`}
+                    onChange={(e) => setEditingJob({...editingJob, minCgpa: e.target.value})}
+                    className="w-full px-3 py-2 bg-gray-950 border border-gray-700 rounded-xl text-white text-xs outline-none focus:border-yellow-500"
                   />
-                  {editJobErrors.minCgpa && <p className="text-red-400 text-xs mt-1">{editJobErrors.minCgpa}</p>}
                 </div>
-
                 <div>
-                  <label className="block text-xs font-semibold text-yellow-400 mb-1">Max Active Backlogs Allowed</label>
+                  <label className="block text-xs font-semibold text-yellow-400 mb-1">Max Backlogs</label>
                   <input 
                     type="number" 
                     min="0"
-                    required 
                     value={editingJob.maxBacklogs} 
-                    onChange={(e) => {
-                      setEditingJob({...editingJob, maxBacklogs: e.target.value});
-                      if (editJobErrors.maxBacklogs) setEditJobErrors(prev => ({...prev, maxBacklogs: null}));
-                    }}
-                    className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-yellow-500 ${editJobErrors.maxBacklogs ? 'border-red-500' : 'border-gray-600'}`}
-                  />
-                  {editJobErrors.maxBacklogs && <p className="text-red-400 text-xs mt-1">{editJobErrors.maxBacklogs}</p>}
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block text-xs font-semibold text-yellow-400 mb-1">Allowed Departments (Comma Separated)</label>
-                  <input 
-                    type="text" 
-                    value={editingJob.allowedDepartments} 
-                    onChange={(e) => setEditingJob({...editingJob, allowedDepartments: e.target.value})}
-                    placeholder="Computer Science, Information Technology, Electronics & Communication"
-                    className="w-full px-4 py-2 bg-gray-900 border border-gray-600 rounded-xl text-white text-sm outline-none focus:border-yellow-500"
+                    onChange={(e) => setEditingJob({...editingJob, maxBacklogs: e.target.value})}
+                    className="w-full px-3 py-2 bg-gray-950 border border-gray-700 rounded-xl text-white text-xs outline-none focus:border-yellow-500"
                   />
                 </div>
               </div>
 
+              {/* Department Checkbox Pills in Edit Job Modal */}
+              <div className="bg-gray-950 p-3.5 rounded-xl border border-gray-800 space-y-2">
+                <div className="flex justify-between items-center">
+                  <label className="block text-xs font-bold text-yellow-400">Allowed College Departments</label>
+                  <div className="flex gap-2 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setEditingJob(prev => ({ ...prev, allowedDepartments: COLLEGE_DEPARTMENTS.map(d => d.name) }))}
+                      className="text-blue-400 hover:text-blue-300 font-bold"
+                    >
+                      All
+                    </button>
+                    <span className="text-gray-600">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setEditingJob(prev => ({ ...prev, allowedDepartments: [] }))}
+                      className="text-gray-400 hover:text-gray-300"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {COLLEGE_DEPARTMENTS.map(dept => {
+                    const isSelected = Array.isArray(editingJob.allowedDepartments) && editingJob.allowedDepartments.includes(dept.name);
+                    return (
+                      <button
+                        key={dept.code}
+                        type="button"
+                        onClick={() => handleToggleDepartmentInEditJob(dept.name)}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all border ${
+                          isSelected 
+                            ? 'bg-blue-600 text-white border-blue-400' 
+                            : 'bg-gray-900 text-gray-400 border-gray-800 hover:border-gray-600'
+                        }`}
+                      >
+                        {dept.icon} {dept.code}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div>
-                <label className="block text-xs font-semibold text-gray-300 mb-1">Job Description & Responsibilities</label>
+                <label className="block text-xs font-semibold text-gray-300 mb-1">Description</label>
                 <textarea 
-                  required 
-                  rows="3" 
+                  rows="2" 
                   value={editingJob.description} 
-                  onChange={(e) => {
-                    setEditingJob({...editingJob, description: e.target.value});
-                    if (editJobErrors.description) setEditJobErrors(prev => ({...prev, description: null}));
-                  }}
-                  className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-blue-500 ${editJobErrors.description ? 'border-red-500' : 'border-gray-600'}`}
+                  onChange={(e) => setEditingJob({...editingJob, description: e.target.value})}
+                  className="w-full px-3.5 py-2 bg-gray-950 border border-gray-700 rounded-xl text-white text-xs outline-none focus:border-blue-500"
                 ></textarea>
-                {editJobErrors.description && <p className="text-red-400 text-xs mt-1">{editJobErrors.description}</p>}
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-300 mb-1">Required Tech Stack & Skills</label>
+                <label className="block text-xs font-semibold text-gray-300 mb-1">Requirements / Skills</label>
                 <input 
                   type="text" 
-                  required 
                   value={editingJob.requirements} 
-                  onChange={(e) => {
-                    setEditingJob({...editingJob, requirements: e.target.value});
-                    if (editJobErrors.requirements) setEditJobErrors(prev => ({...prev, requirements: null}));
-                  }}
-                  className={`w-full px-4 py-2 bg-gray-900 border rounded-xl text-white text-sm outline-none focus:border-blue-500 ${editJobErrors.requirements ? 'border-red-500' : 'border-gray-600'}`}
+                  onChange={(e) => setEditingJob({...editingJob, requirements: e.target.value})}
+                  className="w-full px-3.5 py-2 bg-gray-950 border border-gray-700 rounded-xl text-white text-xs outline-none focus:border-blue-500"
                 />
-                {editJobErrors.requirements && <p className="text-red-400 text-xs mt-1">{editJobErrors.requirements}</p>}
               </div>
 
-              <div className="flex gap-3 pt-3 border-t border-gray-700">
+              <div className="flex gap-3 pt-2">
                 <button 
                   type="button" 
                   onClick={() => { setShowEditJobModal(false); setEditingJob(null); }}
-                  className="flex-1 px-4 py-2.5 bg-gray-700 text-gray-200 rounded-xl text-sm font-semibold hover:bg-gray-600 transition-colors"
+                  className="flex-1 px-4 py-2.5 bg-gray-800 text-gray-300 rounded-xl text-xs font-semibold hover:bg-gray-700 transition-colors"
                 >
                   Cancel
                 </button>
                 <button 
                   type="submit" 
                   disabled={isSavingJob}
-                  className="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold shadow-lg transition-colors disabled:opacity-50"
+                  className="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-lg transition-colors disabled:opacity-50"
                 >
-                  {isSavingJob ? 'Saving Position...' : 'Save Position Changes'}
+                  {isSavingJob ? 'Saving...' : 'Save Position'}
                 </button>
               </div>
             </form>
@@ -2742,92 +2858,40 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* ================= IN-APP RESUME PDF PREVIEW MODAL ================= */}
-      {showResumeModal && previewResume.url && (
-        <div className="fixed inset-0 pt-16 bg-black/85 backdrop-blur-md flex items-center justify-center z-50 animate-fade-in p-4 overflow-y-auto">
-          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            
-            {/* Modal Header */}
-            <div className="p-4 bg-gray-800/90 border-b border-gray-700 flex flex-wrap justify-between items-center gap-3">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-blue-900/40 text-blue-400 rounded-xl">
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-white leading-tight">{previewResume.studentName}'s Resume</h3>
-                  {previewResume.positionTitle && (
-                    <p className="text-xs text-blue-400 font-medium">Position: {previewResume.positionTitle}</p>
-                  )}
-                </div>
-              </div>
+      {/* MULTI-ROUND EVALUATION MODAL */}
+      {showRoundModal && selectedAppForRound && (
+        <RoundEvaluationModal
+          application={selectedAppForRound}
+          onClose={() => {
+            setShowRoundModal(false);
+            setSelectedAppForRound(null);
+          }}
+          onSuccess={(updatedApp) => {
+            setApplications(applications.map(a => a._id === updatedApp._id ? updatedApp : a));
+            setSelectedAppForRound(updatedApp);
+          }}
+        />
+      )}
 
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => openResumeInNewTab(previewResume.url)}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1 shadow-md"
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
-                  Open in New Tab
-                </button>
-                <a
-                  href={previewResume.url}
-                  download
-                  className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
-                  Download
-                </a>
-                <button
-                  onClick={() => { setShowResumeModal(false); setPreviewResume({ url: '', studentName: '', positionTitle: '' }); }}
-                  className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded-lg transition-colors ml-1"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
+      {/* BULK IMPORT STUDENTS MODAL (ADMIN) */}
+      {showBulkImportModal && (
+        <BulkImportModal
+          onClose={() => setShowBulkImportModal(false)}
+          onSuccess={() => {
+            fetchData();
+          }}
+        />
+      )}
 
-            {/* Document Viewer Frame */}
-            <div className="flex-1 p-2 bg-gray-950/60 overflow-hidden flex flex-col min-h-[500px]">
-              {isPdfResume(previewResume.url) || previewResume.url.includes('/view/') || previewResume.url.includes('/uploads/') ? (
-                <iframe
-                  src={previewResume.url}
-                  title="Candidate Resume Preview"
-                  className="w-full flex-1 rounded-xl border border-gray-800 bg-gray-900"
-                />
-              ) : (
-                <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
-                  <div className="p-4 bg-gray-800 rounded-2xl text-blue-400">
-                    <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
-                  </div>
-                  <div>
-                    <h4 className="text-lg font-bold text-white">External Resume Document</h4>
-                    <p className="text-gray-400 text-sm max-w-md mt-1">This resume is hosted on an external portfolio URL or document link.</p>
-                  </div>
-                  <a
-                    href={previewResume.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl shadow-lg transition-colors inline-flex items-center gap-2"
-                  >
-                    Open Resume Document &rarr;
-                  </a>
-                </div>
-              )}
-            </div>
-
-            {/* Modal Footer */}
-            <div className="p-3 bg-gray-800/80 border-t border-gray-700 flex justify-between items-center text-xs text-gray-400">
-              <span>Secure streaming endpoint active</span>
-              <button
-                onClick={() => { setShowResumeModal(false); setPreviewResume({ url: '', studentName: '', positionTitle: '' }); }}
-                className="px-4 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 font-semibold rounded-lg transition-colors"
-              >
-                Close Preview
-              </button>
-            </div>
-
-          </div>
-        </div>
+      {/* RESUME PREVIEW MODAL */}
+      {showResumeModal && (
+        <ResumePreviewModal
+          resumeData={previewResume}
+          onClose={() => {
+            setShowResumeModal(false);
+            setPreviewResume({ url: '', studentName: '', positionTitle: '' });
+          }}
+        />
       )}
 
     </div>
