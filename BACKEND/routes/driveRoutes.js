@@ -1,12 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const Drive = require('../models/Drive');
-const { protect } = require('../middleware/authMiddleware');
+const { protect, authorize } = require('../middleware/authMiddleware');
 
 // @desc    Get placement drives (All for logged in users)
 // @route   GET /api/drives
-// @access  Public or Private
-router.get('/', async (req, res) => {
+// @access  Private (All authenticated users)
+router.get('/', protect, async (req, res) => {
   try {
     const drives = await Drive.find().sort({ createdAt: -1 });
     res.status(200).json(drives);
@@ -19,11 +19,8 @@ router.get('/', async (req, res) => {
 // @desc    Create a new placement drive
 // @route   POST /api/drives
 // @access  Private (Admin only)
-router.post('/', protect, async (req, res) => {
+router.post('/', protect, authorize('admin'), async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Only administrators can initialize placement drives.' });
-    }
 
     const { name, description, academicYear, startDate, endDate, status } = req.body;
 
@@ -60,11 +57,8 @@ router.post('/', protect, async (req, res) => {
 // @desc    Update a placement drive
 // @route   PUT /api/drives/:id
 // @access  Private (Admin only)
-router.put('/:id', protect, async (req, res) => {
+router.put('/:id', protect, authorize('admin'), async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Only administrators can update placement drives.' });
-    }
 
     const drive = await Drive.findById(req.params.id);
     if (!drive) return res.status(404).json({ message: 'Placement Drive not found.' });
@@ -103,11 +97,8 @@ router.put('/:id', protect, async (req, res) => {
 // @desc    Delete a placement drive
 // @route   DELETE /api/drives/:id
 // @access  Private (Admin only)
-router.delete('/:id', protect, async (req, res) => {
+router.delete('/:id', protect, authorize('admin'), async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Only administrators can delete placement drives.' });
-    }
 
     const drive = await Drive.findById(req.params.id);
     if (!drive) return res.status(404).json({ message: 'Placement Drive not found.' });

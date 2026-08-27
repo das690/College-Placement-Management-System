@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Job = require('../models/Job');
 const Drive = require('../models/Drive');
-const { protect } = require('../middleware/authMiddleware');
+const { protect, authorize } = require('../middleware/authMiddleware');
 
 const formatEligibility = (rawEligibility = {}) => {
   let allowedDepts = [];
@@ -53,11 +53,8 @@ router.get('/', protect, async (req, res) => {
 // @desc    Create a new job posting
 // @route   POST /api/jobs
 // @access  Private (Only Companies and Admins)
-router.post('/', protect, async (req, res) => {
+router.post('/', protect, authorize('company', 'admin'), async (req, res) => {
   try {
-    if (req.user.role !== 'company' && req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Not authorized to post jobs. Must be a company or admin.' });
-    }
 
     const { title, description, requirements, location, salary, drive, eligibility } = req.body;
 
@@ -110,7 +107,7 @@ router.post('/', protect, async (req, res) => {
 // @desc    Update job details and eligibility
 // @route   PUT /api/jobs/:id
 // @access  Private (Owning Company or Admin)
-router.put('/:id', protect, async (req, res) => {
+router.put('/:id', protect, authorize('company', 'admin'), async (req, res) => {
   try {
     const job = await Job.findById(req.params.id);
     if (!job) return res.status(404).json({ message: 'Job position not found.' });
@@ -160,7 +157,7 @@ router.put('/:id', protect, async (req, res) => {
 // @desc    Delete a job posting
 // @route   DELETE /api/jobs/:id
 // @access  Private (Only the owning Company or an Admin)
-router.delete('/:id', protect, async (req, res) => {
+router.delete('/:id', protect, authorize('company', 'admin'), async (req, res) => {
   try {
     const job = await Job.findById(req.params.id);
     

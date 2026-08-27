@@ -1,13 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useContext } from 'react';
 import API from '../utils/api';
 import { toast } from 'react-hot-toast';
 import { downloadStudentImportTemplateCSV, parseStudentCSV } from '../utils/exportHelper';
+import { AuthContext } from '../context/AuthContext';
 
 const BulkImportModal = ({ onClose, onSuccess }) => {
+  const { user } = useContext(AuthContext);
   const [parsedStudents, setParsedStudents] = useState([]);
   const [fileName, setFileName] = useState('');
   const [loading, setLoading] = useState(false);
   const [importSummary, setImportSummary] = useState(null);
+
+  if (!user || user.role !== 'admin') {
+    return null;
+  }
 
   const handleFileUpload = (e) => {
     const file = e.target.files[0];

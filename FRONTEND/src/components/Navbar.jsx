@@ -19,9 +19,20 @@ const Navbar = () => {
           <div className="flex items-center space-x-4">
             {user ? (
               <>
-                <span className="text-sm text-gray-400 hidden md:block">
-                  Welcome, <span className="font-semibold text-white">{user.name}</span>
-                </span>
+                <div className="hidden md:flex items-center gap-2">
+                  <span className="text-sm text-gray-400">
+                    Welcome, <span className="font-semibold text-white">{user.name}</span>
+                  </span>
+                  <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${
+                    user.role === 'admin' 
+                      ? 'bg-purple-950 text-purple-300 border-purple-800' 
+                      : user.role === 'company' 
+                      ? 'bg-blue-950 text-blue-300 border-blue-800' 
+                      : 'bg-emerald-950 text-emerald-300 border-emerald-800'
+                  }`}>
+                    {user.role === 'admin' ? '👑 Admin' : user.role === 'company' ? '🏢 Company' : '🎓 Student'}
+                  </span>
+                </div>
                 <button
                   onClick={logout}
                   className="flex items-center space-x-2 text-sm font-medium text-red-400 hover:text-red-300 px-4 py-2 rounded-lg hover:bg-gray-800 border border-transparent hover:border-red-900/50 transition-all"

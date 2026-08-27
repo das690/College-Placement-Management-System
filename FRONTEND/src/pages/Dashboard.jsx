@@ -31,6 +31,13 @@ const RECRUITMENT_STAGES = [
   'Withdrawn'
 ];
 
+// RBAC Role-to-View Permission Mapping
+const ALLOWED_VIEWS_BY_ROLE = {
+  student: ['overview', 'opportunities', 'applications', 'profile', 'communication'],
+  company: ['overview', 'post', 'jobs', 'applications', 'analytics', 'communication'],
+  admin: ['overview', 'departments', 'drives', 'jobs', 'applications', 'analytics', 'communication']
+};
+
 const getMissingAcademicFields = (u) => {
   if (!u || u.role !== 'student') return [];
   const details = u.academicDetails || {};
@@ -47,6 +54,7 @@ const Dashboard = () => {
   const navigate = useNavigate();
   const { view } = useParams(); 
   const currentView = view || 'overview'; 
+  const isCurrentViewAllowed = !view || (user && ALLOWED_VIEWS_BY_ROLE[user.role]?.includes(currentView)); 
 
   // Global Data State
   const [drives, setDrives] = useState([]);
@@ -213,6 +221,17 @@ const Dashboard = () => {
   useEffect(() => {
     if (user) fetchData();
   }, [user]);
+
+  // Strict RBAC View / URL Navigation Guard
+  useEffect(() => {
+    if (user && view) {
+      const allowed = ALLOWED_VIEWS_BY_ROLE[user.role] || ['overview'];
+      if (!allowed.includes(view)) {
+        toast.error(`Access Denied: You do not have permission to view '${view}' as a ${user.role}.`);
+        navigate('/dashboard', { replace: true });
+      }
+    }
+  }, [user, view, navigate]);
 
   // ================= ELIGIBILITY ENGINE HELPER =================
   const checkEligibility = (job) => {
@@ -853,13 +872,6 @@ const Dashboard = () => {
           📊 Overview
         </button>
 
-        {/* Dedicated Department Placements Tab (Available to All Roles) */}
-        <button 
-          onClick={() => navigate('/dashboard/departments')} 
-          className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${currentView === 'departments' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-800 text-gray-400 hover:text-white'}`}
-        >
-          🏛️ Department Placements
-        </button>
 
         {/* Dedicated Communication Hub Tab (Available to All Roles) */}
         <button 
@@ -871,6 +883,12 @@ const Dashboard = () => {
 
         {user.role === 'admin' && (
           <>
+            <button 
+              onClick={() => navigate('/dashboard/departments')} 
+              className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${currentView === 'departments' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-800 text-gray-400 hover:text-white'}`}
+            >
+              🏛️ Department Placements
+            </button>
             <button 
               onClick={() => navigate('/dashboard/drives')} 
               className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${currentView === 'drives' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-800 text-gray-400 hover:text-white'}`}
@@ -952,9 +970,28 @@ const Dashboard = () => {
       </div>
 
       {/* ========================================================= */}
-      {/*              DEPARTMENT PLACEMENTS VIEW                   */}
+      {/*             UNAUTHORIZED VIEW FALLBACK BANNER             */}
       {/* ========================================================= */}
-      {currentView === 'departments' && (
+      {!isCurrentViewAllowed && (
+        <div className="bg-gray-800 p-8 rounded-2xl border border-red-800 text-center space-y-4 max-w-2xl mx-auto my-8 shadow-2xl animate-fade-in">
+          <div className="text-4xl">🚫</div>
+          <h3 className="text-xl font-bold text-white">403 - Access Forbidden</h3>
+          <p className="text-gray-300 text-sm">
+            You do not have the required permissions to access the <strong className="text-yellow-400">{currentView}</strong> section with your <strong>{user?.role}</strong> role.
+          </p>
+          <button 
+            onClick={() => navigate('/dashboard')} 
+            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs transition-colors shadow-md"
+          >
+            &larr; Return to Dashboard Overview
+          </button>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/*              DEPARTMENT PLACEMENTS VIEW (Admin Only)       */}
+      {/* ========================================================= */}
+      {user.role === 'admin' && isCurrentViewAllowed && currentView === 'departments' && (
         <DepartmentAnalytics 
           applications={applications} 
           jobs={jobs} 
@@ -966,7 +1003,7 @@ const Dashboard = () => {
       {/* ========================================================= */}
       {/*                COMMUNICATION HUB VIEW                     */}
       {/* ========================================================= */}
-      {currentView === 'communication' && (
+      {isCurrentViewAllowed && currentView === 'communication' && (
         <CommunicationCenter 
           user={user} 
           jobs={jobs} 
@@ -977,7 +1014,7 @@ const Dashboard = () => {
       {/* ========================================================= */}
       {/*                       STUDENT VIEWS                       */}
       {/* ========================================================= */}
-      {user.role === 'student' && currentView !== 'departments' && currentView !== 'communication' && (
+      {user.role === 'student' && isCurrentViewAllowed && currentView !== 'departments' && currentView !== 'communication' && (
         <div className="space-y-8">
           
           {/* PROFILE INCOMPLETE WARNING BANNER */}
@@ -1451,7 +1488,7 @@ const Dashboard = () => {
       {/* ========================================================= */}
       {/*                        ADMIN VIEWS                        */}
       {/* ========================================================= */}
-      {user.role === 'admin' && currentView !== 'departments' && currentView !== 'communication' && (
+      {user.role === 'admin' && isCurrentViewAllowed && currentView !== 'departments' && currentView !== 'communication' && (
         <div className="space-y-8">
           
           {/* OVERVIEW */}
@@ -1890,7 +1927,7 @@ const Dashboard = () => {
       {/* ========================================================= */}
       {/*                       COMPANY VIEWS                       */}
       {/* ========================================================= */}
-      {user.role === 'company' && currentView !== 'departments' && currentView !== 'communication' && (
+      {user.role === 'company' && isCurrentViewAllowed && currentView !== 'departments' && currentView !== 'communication' && (
         <div className="space-y-8">
           
           {/* OVERVIEW */}

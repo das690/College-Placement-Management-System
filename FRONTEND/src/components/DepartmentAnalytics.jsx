@@ -1,13 +1,31 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useContext } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { COLLEGE_DEPARTMENTS, normalizeDepartment } from '../utils/departments';
 import { exportDepartmentPlacementCSV } from '../utils/exportHelper';
 import { toast } from 'react-hot-toast';
+import { AuthContext } from '../context/AuthContext';
 
 const DepartmentAnalytics = ({ applications = [], jobs = [], drives = [], selectedDriveId = 'ALL' }) => {
+  const { user } = useContext(AuthContext);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDeptFilter, setSelectedDeptFilter] = useState('ALL');
   const [viewMode, setViewMode] = useState('cards'); // 'cards' | 'table' | 'placed_students'
+
+  // RBAC GUARD: Department-wide metrics & student placement lists are strictly Admin-only
+  if (!user || user.role !== 'admin') {
+    return (
+      <div className="bg-gray-800 p-8 rounded-2xl border border-red-800/80 shadow-2xl text-center space-y-4 max-w-2xl mx-auto my-8">
+        <div className="text-4xl">🚫</div>
+        <h3 className="text-xl font-bold text-white">Access Restricted</h3>
+        <p className="text-gray-300 text-sm">
+          Department-wise placement metrics, salary analytics, and placed student reports are restricted to <strong>College Administrators</strong>.
+        </p>
+        <p className="text-xs text-gray-500">
+          Your current session role is: <span className="font-semibold text-yellow-400 capitalize">{user?.role || 'Guest'}</span>
+        </p>
+      </div>
+    );
+  }
 
   // Filter apps by drive
   const driveFilteredApps = useMemo(() => {

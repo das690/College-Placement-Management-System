@@ -3,7 +3,7 @@ const router = express.Router();
 const Communication = require('../models/Communication');
 const Application = require('../models/Application');
 const Job = require('../models/Job');
-const { protect } = require('../middleware/authMiddleware');
+const { protect, authorize } = require('../middleware/authMiddleware');
 
 // @desc    Get all relevant communications / announcements
 // @route   GET /api/communications
@@ -66,12 +66,10 @@ router.get('/', protect, async (req, res) => {
 
 // @desc    Post a new announcement / broadcast message
 // @route   POST /api/communications
-// @access  Private (Admins & Companies)
-router.post('/', protect, async (req, res) => {
+// @access  Private (Admins & Companies only)
+router.post('/', protect, authorize('admin', 'company'), async (req, res) => {
   try {
-    if (req.user.role !== 'admin' && req.user.role !== 'company') {
-      return res.status(403).json({ message: 'Only Administrators and Recruiting Companies can broadcast communications.' });
-    }
+
 
     const { 
       title, 
@@ -93,11 +91,17 @@ router.post('/', protect, async (req, res) => {
       return res.status(400).json({ message: 'Detailed message body is required (at least 10 characters).' });
     }
 
-    // Verify job belongs to company if company role
-    if (req.user.role === 'company' && jobId) {
+    // RBAC: Companies can only broadcast to applicants or shortlisted candidates for their own jobs
+    if (req.user.role === 'company') {
+      if (!jobId) {
+        return res.status(400).json({ message: 'Company announcements must be linked to a specific job position.' });
+      }
       const job = await Job.findById(jobId);
       if (!job || job.company.toString() !== req.user._id.toString()) {
         return res.status(403).json({ message: 'You can only broadcast messages targeting your own posted positions.' });
+      }
+      if (targetAudience === 'All Students' || targetAudience === 'Specific Department') {
+        return res.status(403).json({ message: 'Only College Administrators can broadcast college-wide or department-wide announcements.' });
       }
     }
 
@@ -108,10 +112,10 @@ router.post('/', protect, async (req, res) => {
       sender: req.user._id,
       senderRole: req.user.role,
       senderName: req.user.name,
-      targetAudience: targetAudience || 'All Students',
+      targetAudience: req.user.role === 'company' ? (targetAudience || 'Job Applicants') : (targetAudience || 'All Students'),
       job: jobId || undefined,
       drive: driveId || undefined,
-      targetDepartment: targetDepartment || 'ALL',
+      targetDepartment: (req.user.role === 'admin' && targetAudience === 'Specific Department') ? (targetDepartment || 'ALL') : 'ALL',
       actionUrl: actionUrl || '',
       isUrgent: !!isUrgent
     });
@@ -130,7 +134,7 @@ router.post('/', protect, async (req, res) => {
 // @desc    Delete an announcement
 // @route   DELETE /api/communications/:id
 // @access  Private (Admins or Owning Company)
-router.delete('/:id', protect, async (req, res) => {
+router.delete('/:id', protect, authorize('admin', 'company'), async (req, res) => {
   try {
     const item = await Communication.findById(req.params.id);
     if (!item) {

@@ -3,7 +3,7 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
-const { protect } = require('../middleware/authMiddleware');
+const { protect, authorize } = require('../middleware/authMiddleware');
 
 // Utility function to generate JWT
 const generateToken = (id) => {
@@ -126,8 +126,8 @@ router.get('/me', protect, async (req, res) => {
 
 // @desc    Get all students (for Admin / Department reports)
 // @route   GET /api/users/students
-// @access  Private (Admins & Companies)
-router.get('/students', protect, async (req, res) => {
+// @access  Private (Admins & Companies only)
+router.get('/students', protect, authorize('admin', 'company'), async (req, res) => {
   try {
     const students = await User.find({ role: 'student' }).select('-password').sort({ createdAt: -1 });
     res.status(200).json(students);
@@ -139,8 +139,8 @@ router.get('/students', protect, async (req, res) => {
 
 // @desc    Update student academic profile
 // @route   PUT /api/users/profile
-// @access  Private (Students)
-router.put('/profile', protect, async (req, res) => {
+// @access  Private (Students only)
+router.put('/profile', protect, authorize('student'), async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -197,11 +197,8 @@ router.put('/profile', protect, async (req, res) => {
 // @desc    Bulk Import Students from CSV data
 // @route   POST /api/users/import-students
 // @access  Private (Admin only)
-router.post('/import-students', protect, async (req, res) => {
+router.post('/import-students', protect, authorize('admin'), async (req, res) => {
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Only administrators are authorized to perform bulk student imports.' });
-    }
 
     const { students } = req.body;
     if (!students || !Array.isArray(students) || students.length === 0) {

@@ -3,7 +3,7 @@ const router = express.Router();
 const Application = require('../models/Application');
 const Job = require('../models/Job');
 const User = require('../models/User');
-const { protect } = require('../middleware/authMiddleware'); 
+const { protect, authorize } = require('../middleware/authMiddleware'); 
 
 // Standard Department Aliases for resilient matching
 const DEPARTMENT_ALIASES = {
@@ -85,7 +85,7 @@ router.get('/', protect, async (req, res) => {
 // @desc    Submit a new application (ELIGIBILITY ENGINE WITH SMART MATCHING)
 // @route   POST /api/applications
 // @access  Private (Students only)
-router.post('/', protect, async (req, res) => {
+router.post('/', protect, authorize('student'), async (req, res) => {
   try {
     const { jobId, resumeUrl } = req.body;
     
@@ -188,14 +188,22 @@ router.post('/', protect, async (req, res) => {
   }
 });
 
-// @desc    Update application status (HR/Admin) - WITHDRAWN GUARD PROTECTED
+// @desc    Update application status (HR/Admin) - WITHDRAWN GUARD & RBAC PROTECTED
 // @route   PUT /api/applications/:id/status
-// @access  Private (Companies or Admins)
-router.put('/:id/status', protect, async (req, res) => {
+// @access  Private (Companies or Admins only)
+router.put('/:id/status', protect, authorize('company', 'admin'), async (req, res) => {
   try {
-    const application = await Application.findById(req.params.id);
+    const application = await Application.findById(req.params.id).populate('job');
     if (!application) return res.status(404).json({ message: 'Application not found' });
     
+    // RBAC OWNERSHIP CHECK: Company can only update status of applications for their own jobs
+    if (req.user.role === 'company') {
+      const jobCompanyId = typeof application.job === 'object' ? application.job?.company?.toString() : null;
+      if (jobCompanyId && jobCompanyId !== req.user.id && jobCompanyId !== req.user._id?.toString()) {
+        return res.status(403).json({ message: 'Not authorized: You can only update applications for your own posted positions.' });
+      }
+    }
+
     // WITHDRAWN GUARD: Prevent company/admin from altering status if candidate has withdrawn
     if (application.status === 'Withdrawn' && req.user.role !== 'student') {
       return res.status(400).json({ 
@@ -238,15 +246,19 @@ router.put('/:id/status', protect, async (req, res) => {
 
 // @desc    Add or Update Round Evaluation & Feedback
 // @route   POST /api/applications/:id/rounds
-// @access  Private (Companies or Admins)
-router.post('/:id/rounds', protect, async (req, res) => {
+// @access  Private (Companies or Admins only)
+router.post('/:id/rounds', protect, authorize('company', 'admin'), async (req, res) => {
   try {
-    if (req.user.role !== 'company' && req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Only recruiters and administrators can add round evaluations.' });
-    }
-
-    const application = await Application.findById(req.params.id);
+    const application = await Application.findById(req.params.id).populate('job');
     if (!application) return res.status(404).json({ message: 'Application not found' });
+
+    // RBAC OWNERSHIP CHECK: Company can only score/evaluate candidates for their own jobs
+    if (req.user.role === 'company') {
+      const jobCompanyId = typeof application.job === 'object' ? application.job?.company?.toString() : null;
+      if (jobCompanyId && jobCompanyId !== req.user.id && jobCompanyId !== req.user._id?.toString()) {
+        return res.status(403).json({ message: 'Not authorized: You can only record evaluations for your own posted positions.' });
+      }
+    }
 
     if (application.status === 'Withdrawn') {
       return res.status(400).json({ message: 'Cannot add evaluations for a withdrawn application.' });
@@ -301,15 +313,19 @@ router.post('/:id/rounds', protect, async (req, res) => {
 
 // @desc    Delete a Round Evaluation
 // @route   DELETE /api/applications/:id/rounds/:roundId
-// @access  Private (Companies or Admins)
-router.delete('/:id/rounds/:roundId', protect, async (req, res) => {
+// @access  Private (Companies or Admins only)
+router.delete('/:id/rounds/:roundId', protect, authorize('company', 'admin'), async (req, res) => {
   try {
-    if (req.user.role !== 'company' && req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Not authorized to delete round evaluations.' });
-    }
-
-    const application = await Application.findById(req.params.id);
+    const application = await Application.findById(req.params.id).populate('job');
     if (!application) return res.status(404).json({ message: 'Application not found.' });
+
+    // RBAC OWNERSHIP CHECK: Company can only delete evaluations for their own jobs
+    if (req.user.role === 'company') {
+      const jobCompanyId = typeof application.job === 'object' ? application.job?.company?.toString() : null;
+      if (jobCompanyId && jobCompanyId !== req.user.id && jobCompanyId !== req.user._id?.toString()) {
+        return res.status(403).json({ message: 'Not authorized: You can only modify evaluations for your own posted positions.' });
+      }
+    }
 
     application.rounds = application.rounds.filter(r => r._id.toString() !== req.params.roundId);
     await application.save();
@@ -328,22 +344,34 @@ router.delete('/:id/rounds/:roundId', protect, async (req, res) => {
 
 // @desc    Soft-terminate / Withdraw an application (Preserve analytics data)
 // @route   DELETE /api/applications/:id
-// @access  Private (Admins, Companies, or Owning Student)
+// @access  Private (Admins, Owning Companies, or Owning Student)
 router.delete('/:id', protect, async (req, res) => {
   try {
-    const application = await Application.findById(req.params.id);
+    const application = await Application.findById(req.params.id).populate('job');
     
     if (!application) {
       return res.status(404).json({ message: 'Application not found' });
     }
 
-    // SECURITY CHECK: Is it an Admin, Company, OR the student who owns this application?
-    if (req.user.role !== 'admin' && req.user.role !== 'company' && application.student.toString() !== req.user.id) {
+    // RBAC AUTHORIZATION CHECK:
+    // 1. Student can only withdraw their own application
+    // 2. Company can only terminate applications targeting their own posted positions
+    // 3. Admin can terminate any application
+    if (req.user.role === 'student') {
+      if (application.student.toString() !== req.user.id && application.student.toString() !== req.user._id?.toString()) {
+        return res.status(403).json({ message: 'Not authorized: You can only withdraw your own applications.' });
+      }
+    } else if (req.user.role === 'company') {
+      const jobCompanyId = typeof application.job === 'object' ? application.job?.company?.toString() : null;
+      if (jobCompanyId && jobCompanyId !== req.user.id && jobCompanyId !== req.user._id?.toString()) {
+        return res.status(403).json({ message: 'Not authorized: You can only terminate applications for your own posted positions.' });
+      }
+    } else if (req.user.role !== 'admin') {
       return res.status(403).json({ message: 'Not authorized to modify this application' });
     }
     
     // Soft-terminate status to preserve application submission records for drive analytics
-    if (req.user.role === 'student' && application.student.toString() === req.user.id) {
+    if (req.user.role === 'student') {
       application.status = 'Withdrawn';
       // Append withdrawal note to rounds
       application.rounds.push({

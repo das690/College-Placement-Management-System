@@ -42,11 +42,13 @@ const CommunicationCenter = ({ user, jobs = [], drives = [] }) => {
   const [filterType, setFilterType] = useState('ALL');
   const [showComposer, setShowComposer] = useState(false);
 
+  const canPost = user?.role === 'admin' || user?.role === 'company';
+
   const [formData, setFormData] = useState({
     title: '',
     message: '',
     type: 'Announcement',
-    targetAudience: 'All Students',
+    targetAudience: user?.role === 'company' ? 'Job Applicants' : 'All Students',
     jobId: '',
     driveId: '',
     targetDepartment: 'ALL',
@@ -55,8 +57,6 @@ const CommunicationCenter = ({ user, jobs = [], drives = [] }) => {
   });
   const [errors, setErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
-
-  const canPost = user?.role === 'admin' || user?.role === 'company';
 
   const fetchCommunications = async () => {
     try {
@@ -248,14 +248,14 @@ const CommunicationCenter = ({ user, jobs = [], drives = [] }) => {
                   onChange={(e) => setFormData({ ...formData, targetAudience: e.target.value })}
                   className="w-full px-4 py-2.5 bg-gray-900 border border-gray-600 rounded-xl text-white text-sm outline-none focus:border-blue-500"
                 >
-                  <option value="All Students">🌐 All Registered Students</option>
+                  {user?.role === 'admin' && <option value="All Students">🌐 All Registered Students (Admin)</option>}
+                  {user?.role === 'admin' && <option value="Specific Department">🏛️ Specific Department Students (Admin)</option>}
                   <option value="Job Applicants">👥 Position Specific Applicants</option>
                   <option value="Shortlisted Candidates">⭐ Shortlisted / Interview Candidates</option>
-                  <option value="Specific Department">🏛️ Specific Department Students</option>
                 </select>
               </div>
 
-              {formData.targetAudience === 'Specific Department' && (
+              {user?.role === 'admin' && formData.targetAudience === 'Specific Department' && (
                 <div>
                   <label className="block text-xs font-semibold text-gray-300 mb-1">Select Department</label>
                   <select

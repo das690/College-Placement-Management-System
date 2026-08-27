@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const { Readable } = require('stream');
 const cloudinary = require('cloudinary').v2;
-const { protect } = require('../middleware/authMiddleware');
+const { protect, authorize } = require('../middleware/authMiddleware');
 
 // Configure Cloudinary from environment variables
 if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET) {
@@ -75,8 +75,8 @@ const uploadToCloudinary = (fileBuffer, originalname) => {
 
 // @desc    Upload a PDF or Word Resume file (Cloudinary Cloud Storage with Local Fallback)
 // @route   POST /api/upload
-// @access  Private (Logged in users only)
-router.post('/', protect, (req, res) => {
+// @access  Private (Students only)
+router.post('/', protect, authorize('student'), (req, res) => {
   upload.single('resume')(req, res, async (err) => {
     if (err) {
       return res.status(400).json({ message: 'Error processing resume upload: ' + err.message });
