@@ -1,5 +1,7 @@
 const Application = require('../models/Application');
 const Job = require('../models/Job');
+const { generateMockMeetingLink } = require('../utils/videoService');
+const { sendEmailNotification, sendSmsNotification } = require('../utils/notificationService');
 
 // @desc    Apply for a job
 // @route   POST /api/applications
@@ -76,7 +78,9 @@ const updateApplicationStatus = async (req, res) => {
     // Now we extract the status AND the optional interview details
     const { status, interviewDate, interviewTime, interviewLink } = req.body;
     
-    const application = await Application.findById(req.params.id);
+    const application = await Application.findById(req.params.id)
+      .populate('student', 'name email')
+      .populate('job', 'title');
 
     if (!application) {
       return res.status(404).json({ message: 'Application not found' });
@@ -88,7 +92,24 @@ const updateApplicationStatus = async (req, res) => {
     // If they sent interview details, save those too!
     if (interviewDate) application.interviewDate = interviewDate;
     if (interviewTime) application.interviewTime = interviewTime;
-    if (interviewLink) application.interviewLink = interviewLink;
+    
+    // Automatically generate video link if scheduled, or use provided
+    if (status === 'Interview Scheduled') {
+      application.interviewLink = interviewLink || generateMockMeetingLink();
+      
+      // Trigger Notifications
+      const emailSubject = `Interview Scheduled: ${application.job.title}`;
+      const emailText = `Hello ${application.student.name},\n\nYour interview for ${application.job.title} has been scheduled.\nDate: ${application.interviewDate}\nTime: ${application.interviewTime}\nJoin Link: ${application.interviewLink}\n\nGood luck!`;
+      
+      await sendEmailNotification(application.student.email, emailSubject, emailText);
+      await sendSmsNotification("+1234567890", `Interview scheduled for ${application.job.title} on ${application.interviewDate} at ${application.interviewTime}. Check email for link.`);
+    } else if (status === 'Selected') {
+      await sendEmailNotification(application.student.email, `Congratulations! Selected for ${application.job.title}`, `Hello ${application.student.name}, you have been selected for the position!`);
+    } else if (status === 'Rejected') {
+      await sendEmailNotification(application.student.email, `Update on your application for ${application.job.title}`, `Hello ${application.student.name}, unfortunately we are moving forward with other candidates.`);
+    } else if (interviewLink) {
+       application.interviewLink = interviewLink;
+    }
 
     await application.save();
 

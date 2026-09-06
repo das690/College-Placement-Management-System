@@ -589,6 +589,38 @@ const Dashboard = () => {
     }
   };
 
+  const handleSyncERP = async () => {
+    try {
+      const res = await API.post('/users/sync-erp');
+      toast.success(res.data.message || "Successfully synced with University ERP!");
+      const updatedUser = { ...res.data.user, token: user?.token || localStorage.getItem('token') };
+      if (setUser) setUser(updatedUser);
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+      // Update local state
+      setStudentProfile(prev => ({
+        ...prev,
+        department: updatedUser.academicDetails.department,
+        graduationYear: updatedUser.academicDetails.graduationYear,
+        cgpa: updatedUser.academicDetails.cgpa,
+        activeBacklogs: updatedUser.academicDetails.activeBacklogs
+      }));
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Failed to sync with ERP");
+    }
+  };
+
+  const handleSyncRegistry = async () => {
+    try {
+      const res = await API.post('/users/sync-company-registry');
+      toast.success(res.data.message || "Successfully synced with Company Registry!");
+      const updatedUser = { ...res.data.user, token: user?.token || localStorage.getItem('token') };
+      if (setUser) setUser(updatedUser);
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Failed to sync with Registry");
+    }
+  };
+
   const handleSaveQuickProfile = async (e) => {
     e.preventDefault();
     const validation = validateStudentProfile({
@@ -1091,8 +1123,16 @@ const Dashboard = () => {
             <div className="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-xl max-w-3xl mx-auto animate-fade-in">
               <div className="flex justify-between items-center mb-6 pb-4 border-b border-gray-700">
                 <div>
-                  <h2 className="text-2xl font-bold text-white">Student Academic Profile</h2>
-                  <p className="text-gray-400 text-sm">Required for Placement Drive eligibility verification and drive reporting</p>
+                  <h2 className="text-2xl font-bold text-white flex items-center gap-4">
+                    Student Academic Profile
+                    <button 
+                      onClick={handleSyncERP}
+                      className="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white text-sm font-bold rounded shadow-lg transition-all"
+                    >
+                      🔄 Sync ERP
+                    </button>
+                  </h2>
+                  <p className="text-gray-400 text-sm mt-1">Required for Placement Drive eligibility verification and drive reporting</p>
                 </div>
                 <span className="px-3 py-1 bg-blue-900/50 text-blue-300 text-xs font-semibold rounded-full border border-blue-800">
                   Graduation Year: {studentProfile.graduationYear || 2026}
@@ -1950,6 +1990,29 @@ const Dashboard = () => {
                   <div className="p-4 rounded-xl bg-green-900/30 text-green-400 text-2xl">🎉</div>
                   <div><p className="text-gray-400 text-xs uppercase font-semibold">Hired Candidates</p><h3 className="text-3xl font-bold text-white">{selectedCount}</h3></div>
                 </div>
+              </div>
+
+              {/* Company Profile Details */}
+              <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg flex justify-between items-center mb-8">
+                <div>
+                  <h3 className="text-xl font-bold text-white mb-2">Company Registry Information</h3>
+                  {user.companyDetails?.verified ? (
+                    <div className="text-sm text-gray-300 space-y-1">
+                      <p><span className="text-gray-500 font-semibold">Industry:</span> {user.companyDetails.industry}</p>
+                      <p><span className="text-gray-500 font-semibold">Size:</span> {user.companyDetails.size}</p>
+                      <p><span className="text-gray-500 font-semibold">Website:</span> {user.companyDetails.website}</p>
+                      <p><span className="text-green-400 font-bold">✓ Verified Registry Status</span></p>
+                    </div>
+                  ) : (
+                    <p className="text-gray-400 text-sm">Your company profile is not synced with the global registry. Unverified companies may face restrictions.</p>
+                  )}
+                </div>
+                <button 
+                  onClick={handleSyncRegistry}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-lg transition-all"
+                >
+                  🔄 Sync Registry
+                </button>
               </div>
 
               {/* Quick Actions */}

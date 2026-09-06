@@ -29,6 +29,14 @@ const userSchema = new mongoose.Schema({
     skills: [{ type: String }],
     certifications: [{ type: String }],
     resumeUrl: { type: String }
+  },
+
+  // Company Profile
+  companyDetails: {
+    industry: { type: String },
+    size: { type: String },
+    website: { type: String },
+    verified: { type: Boolean, default: false }
   }
 }, { timestamps: true });
 

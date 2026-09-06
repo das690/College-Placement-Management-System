@@ -292,4 +292,65 @@ router.post('/import-students', protect, authorize('admin'), async (req, res) =>
   }
 });
 
+const { fetchStudentAcademicRecords } = require('../services/universityIntegration');
+const { fetchCompanyRegistryDetails } = require('../services/companyIntegration');
+
+// @desc    Sync Student Profile with External University ERP
+// @route   POST /api/users/sync-erp
+// @access  Private (Student only)
+router.post('/sync-erp', protect, authorize('student'), async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // Fetch from mock external service
+    const externalData = await fetchStudentAcademicRecords(user.email);
+    
+    user.academicDetails.cgpa = externalData.cgpa;
+    user.academicDetails.activeBacklogs = externalData.activeBacklogs;
+    user.academicDetails.department = externalData.department;
+    user.academicDetails.graduationYear = externalData.graduationYear;
+
+    const updatedUser = await user.save();
+
+    res.status(200).json({
+      message: 'Successfully synced with University ERP',
+      user: updatedUser
+    });
+  } catch (error) {
+    console.error('POST /api/users/sync-erp error:', error.message);
+    res.status(500).json({ message: 'Failed to sync with ERP' });
+  }
+});
+
+// @desc    Sync Company Profile with External Registry
+// @route   POST /api/users/sync-company-registry
+// @access  Private (Company only)
+router.post('/sync-company-registry', protect, authorize('company'), async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // Fetch from mock external service
+    const externalData = await fetchCompanyRegistryDetails(user.name);
+    
+    user.companyDetails = {
+      industry: externalData.industry,
+      size: externalData.size,
+      website: externalData.website,
+      verified: externalData.verified
+    };
+
+    const updatedUser = await user.save();
+
+    res.status(200).json({
+      message: 'Successfully synced with Company Registry',
+      user: updatedUser
+    });
+  } catch (error) {
+    console.error('POST /api/users/sync-company-registry error:', error.message);
+    res.status(500).json({ message: 'Failed to sync with Registry' });
+  }
+});
+
 module.exports = router;
